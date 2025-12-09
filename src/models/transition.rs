@@ -36,10 +36,21 @@ pub trait TransitionModel<T: RealField, const N: usize> {
 /// Constant velocity model in 2D.
 ///
 /// State: [x, y, vx, vy]
+///
+/// The target is assumed to move with (nearly) constant velocity, where
+/// target acceleration is modeled as white noise. Uses the integrated
+/// white noise (Wiener velocity) model.
+///
+/// The process noise covariance follows the continuous white noise model:
+/// ```text
+/// Q = [[dt³/3, dt²/2],
+///      [dt²/2, dt    ]] * q
+/// ```
+/// where q is the velocity noise diffusion coefficient.
 #[derive(Debug, Clone)]
 pub struct ConstantVelocity2D<T: RealField> {
-    /// Process noise intensity (acceleration variance)
-    pub sigma_a: T,
+    /// Velocity noise diffusion coefficient
+    pub noise_diff_coeff: T,
     /// Survival probability
     pub p_survival: T,
 }
@@ -48,22 +59,22 @@ impl<T: RealField + Float + Copy> ConstantVelocity2D<T> {
     /// Creates a new constant velocity model.
     ///
     /// # Arguments
-    /// - `sigma_a`: Process noise intensity / acceleration standard deviation (must be >= 0)
+    /// - `noise_diff_coeff`: Velocity noise diffusion coefficient (must be >= 0).
     /// - `p_survival`: Probability that a target survives to the next time step (must be in [0, 1])
     ///
     /// # Panics
-    /// Panics if `sigma_a < 0` or `p_survival` is not in [0, 1].
-    pub fn new(sigma_a: T, p_survival: T) -> Self {
+    /// Panics if `noise_diff_coeff < 0` or `p_survival` is not in [0, 1].
+    pub fn new(noise_diff_coeff: T, p_survival: T) -> Self {
         assert!(
-            sigma_a >= T::zero(),
-            "Process noise sigma_a must be non-negative"
+            noise_diff_coeff >= T::zero(),
+            "Process noise noise_diff_coeff must be non-negative"
         );
         assert!(
             p_survival >= T::zero() && p_survival <= T::one(),
             "Survival probability must be in [0, 1]"
         );
         Self {
-            sigma_a,
+            noise_diff_coeff,
             p_survival,
         }
     }
@@ -87,25 +98,25 @@ impl<T: RealField + Float + Copy> TransitionModel<T, 4> for ConstantVelocity2D<T
         assert!(dt >= T::zero(), "Time step dt must be non-negative");
         let dt2 = dt * dt;
         let dt3 = dt2 * dt;
-        let dt4 = dt3 * dt;
 
         let two = T::from_f64(2.0).unwrap();
-        let four = T::from_f64(4.0).unwrap();
+        let three = T::from_f64(3.0).unwrap();
 
-        let sigma_sq = self.sigma_a * self.sigma_a;
+        let q = self.noise_diff_coeff;
 
-        // Discrete white noise acceleration model
-        let q11 = dt4 / four * sigma_sq;
-        let q13 = dt3 / two * sigma_sq;
-        let q33 = dt2 * sigma_sq;
+        // Integrated white noise (Wiener velocity) model
+        // Q = [[dt³/3, dt²/2], [dt²/2, dt]] * q  (per axis)
+        let q_pp = dt3 / three * q; // position-position
+        let q_pv = dt2 / two * q; // position-velocity
+        let q_vv = dt * q; // velocity-velocity
 
         let zero = T::zero();
 
         StateCovariance::from_matrix(nalgebra::matrix![
-            q11, zero, q13, zero;
-            zero, q11, zero, q13;
-            q13, zero, q33, zero;
-            zero, q13, zero, q33
+            q_pp, zero, q_pv, zero;
+            zero, q_pp, zero, q_pv;
+            q_pv, zero, q_vv, zero;
+            zero, q_pv, zero, q_vv
         ])
     }
 
@@ -117,10 +128,21 @@ impl<T: RealField + Float + Copy> TransitionModel<T, 4> for ConstantVelocity2D<T
 /// Constant velocity model in 3D.
 ///
 /// State: [x, y, z, vx, vy, vz]
+///
+/// The target is assumed to move with (nearly) constant velocity, where
+/// target acceleration is modeled as white noise. Uses the integrated
+/// white noise (Wiener velocity) model.
+///
+/// The process noise covariance follows the continuous white noise model:
+/// ```text
+/// Q = [[dt³/3, dt²/2],
+///      [dt²/2, dt    ]] * q
+/// ```
+/// where q is the velocity noise diffusion coefficient (applied per axis).
 #[derive(Debug, Clone)]
 pub struct ConstantVelocity3D<T: RealField> {
-    /// Process noise intensity (acceleration variance)
-    pub sigma_a: T,
+    /// Velocity noise diffusion coefficient
+    pub noise_diff_coeff: T,
     /// Survival probability
     pub p_survival: T,
 }
@@ -129,22 +151,22 @@ impl<T: RealField + Float + Copy> ConstantVelocity3D<T> {
     /// Creates a new constant velocity model.
     ///
     /// # Arguments
-    /// - `sigma_a`: Process noise intensity / acceleration standard deviation (must be >= 0)
+    /// - `noise_diff_coeff`: Velocity noise diffusion coefficient (must be >= 0).
     /// - `p_survival`: Probability that a target survives to the next time step (must be in [0, 1])
     ///
     /// # Panics
-    /// Panics if `sigma_a < 0` or `p_survival` is not in [0, 1].
-    pub fn new(sigma_a: T, p_survival: T) -> Self {
+    /// Panics if `noise_diff_coeff < 0` or `p_survival` is not in [0, 1].
+    pub fn new(noise_diff_coeff: T, p_survival: T) -> Self {
         assert!(
-            sigma_a >= T::zero(),
-            "Process noise sigma_a must be non-negative"
+            noise_diff_coeff >= T::zero(),
+            "Process noise noise_diff_coeff must be non-negative"
         );
         assert!(
             p_survival >= T::zero() && p_survival <= T::one(),
             "Survival probability must be in [0, 1]"
         );
         Self {
-            sigma_a,
+            noise_diff_coeff,
             p_survival,
         }
     }
@@ -170,26 +192,27 @@ impl<T: RealField + Float + Copy> TransitionModel<T, 6> for ConstantVelocity3D<T
         assert!(dt >= T::zero(), "Time step dt must be non-negative");
         let dt2 = dt * dt;
         let dt3 = dt2 * dt;
-        let dt4 = dt3 * dt;
 
         let two = T::from_f64(2.0).unwrap();
-        let four = T::from_f64(4.0).unwrap();
+        let three = T::from_f64(3.0).unwrap();
 
-        let sigma_sq = self.sigma_a * self.sigma_a;
+        let q = self.noise_diff_coeff;
 
-        let q11 = dt4 / four * sigma_sq;
-        let q14 = dt3 / two * sigma_sq;
-        let q44 = dt2 * sigma_sq;
+        // Integrated white noise (Wiener velocity) model
+        // Q = [[dt³/3, dt²/2], [dt²/2, dt]] * q  (per axis)
+        let q_pp = dt3 / three * q; // position-position
+        let q_pv = dt2 / two * q; // position-velocity
+        let q_vv = dt * q; // velocity-velocity
 
         let zero = T::zero();
 
         StateCovariance::from_matrix(nalgebra::matrix![
-            q11, zero, zero, q14, zero, zero;
-            zero, q11, zero, zero, q14, zero;
-            zero, zero, q11, zero, zero, q14;
-            q14, zero, zero, q44, zero, zero;
-            zero, q14, zero, zero, q44, zero;
-            zero, zero, q14, zero, zero, q44
+            q_pp, zero, zero, q_pv, zero, zero;
+            zero, q_pp, zero, zero, q_pv, zero;
+            zero, zero, q_pp, zero, zero, q_pv;
+            q_pv, zero, zero, q_vv, zero, zero;
+            zero, q_pv, zero, zero, q_vv, zero;
+            zero, zero, q_pv, zero, zero, q_vv
         ])
     }
 
@@ -212,16 +235,18 @@ impl<T: RealField + Float + Copy> TransitionModel<T, 6> for ConstantVelocity3D<T
 ///
 /// where θ = atan2(vy, vx) and v = sqrt(vx² + vy²).
 ///
+/// Uses the integrated white noise model for position/velocity noise,
+///
 /// **Important**: This is a nonlinear model. The `transition_matrix()` method
 /// returns a linearization around zero turn rate for use with the standard
 /// Kalman filter. For proper tracking with significant turn rates, use an
 /// Extended Kalman Filter (EKF) with `transition_matrix_at()`.
 #[derive(Debug, Clone)]
 pub struct CoordinatedTurn2D<T: RealField> {
-    /// Process noise intensity for linear acceleration
-    pub sigma_a: T,
-    /// Process noise intensity for turn rate acceleration
-    pub sigma_omega: T,
+    /// Velocity noise diffusion coefficient (for position/velocity states)
+    pub noise_diff_coeff: T,
+    /// Turn rate noise diffusion coefficient
+    pub turn_noise_diff_coeff: T,
     /// Survival probability
     pub p_survival: T,
 }
@@ -230,28 +255,28 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
     /// Creates a new coordinated turn model.
     ///
     /// # Arguments
-    /// - `sigma_a`: Process noise intensity for linear acceleration (must be >= 0)
-    /// - `sigma_omega`: Process noise intensity for turn rate (must be >= 0)
+    /// - `noise_diff_coeff`: Velocity noise diffusion coefficient (must be >= 0)
+    /// - `turn_noise_diff_coeff`: Turn rate noise diffusion coefficient (must be >= 0)
     /// - `p_survival`: Probability that a target survives to the next time step (must be in [0, 1])
     ///
     /// # Panics
     /// Panics if noise parameters are negative or `p_survival` is not in [0, 1].
-    pub fn new(sigma_a: T, sigma_omega: T, p_survival: T) -> Self {
+    pub fn new(noise_diff_coeff: T, turn_noise_diff_coeff: T, p_survival: T) -> Self {
         assert!(
-            sigma_a >= T::zero(),
-            "Process noise sigma_a must be non-negative"
+            noise_diff_coeff >= T::zero(),
+            "Process noise noise_diff_coeff must be non-negative"
         );
         assert!(
-            sigma_omega >= T::zero(),
-            "Process noise sigma_omega must be non-negative"
+            turn_noise_diff_coeff >= T::zero(),
+            "Process noise turn_noise_diff_coeff must be non-negative"
         );
         assert!(
             p_survival >= T::zero() && p_survival <= T::one(),
             "Survival probability must be in [0, 1]"
         );
         Self {
-            sigma_a,
-            sigma_omega,
+            noise_diff_coeff,
+            turn_noise_diff_coeff,
             p_survival,
         }
     }
@@ -391,29 +416,29 @@ impl<T: RealField + Float + Copy> TransitionModel<T, 5> for CoordinatedTurn2D<T>
         assert!(dt >= T::zero(), "Time step dt must be non-negative");
         let dt2 = dt * dt;
         let dt3 = dt2 * dt;
-        let dt4 = dt3 * dt;
 
         let two = T::from_f64(2.0).unwrap();
-        let four = T::from_f64(4.0).unwrap();
+        let three = T::from_f64(3.0).unwrap();
 
-        let sigma_a_sq = self.sigma_a * self.sigma_a;
-        let sigma_omega_sq = self.sigma_omega * self.sigma_omega;
+        let q = self.noise_diff_coeff;
+        let q_omega = self.turn_noise_diff_coeff;
         let zero = T::zero();
 
-        // Discrete white noise acceleration model for position/velocity
-        let q11 = dt4 / four * sigma_a_sq;
-        let q13 = dt3 / two * sigma_a_sq;
-        let q33 = dt2 * sigma_a_sq;
+        // Integrated white noise (Wiener velocity) model
+        // Q = [[dt³/3, dt²/2], [dt²/2, dt]] * q  (per axis)
+        let q_pp = dt3 / three * q; // position-position
+        let q_pv = dt2 / two * q; // position-velocity
+        let q_vv = dt * q; // velocity-velocity
 
-        // Turn rate noise
-        let q55 = dt2 * sigma_omega_sq;
+        // Turn rate noise (random walk model)
+        let q_omega_omega = dt * q_omega;
 
         StateCovariance::from_matrix(nalgebra::matrix![
-            q11, zero, q13, zero, zero;
-            zero, q11, zero, q13, zero;
-            q13, zero, q33, zero, zero;
-            zero, q13, zero, q33, zero;
-            zero, zero, zero, zero, q55
+            q_pp, zero, q_pv, zero, zero;
+            zero, q_pp, zero, q_pv, zero;
+            q_pv, zero, q_vv, zero, zero;
+            zero, q_pv, zero, q_vv, zero;
+            zero, zero, zero, zero, q_omega_omega
         ])
     }
 

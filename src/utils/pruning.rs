@@ -43,21 +43,45 @@ impl<T: RealField + Float> PruningConfig<T> {
 }
 
 /// Prunes components with weight below a threshold.
+///
+/// The weights of pruned components are
+/// redistributed equally among the remaining components to preserve the
+/// total weight (expected target count in PHD filters).
 #[cfg(feature = "alloc")]
-pub fn prune_by_weight<T: RealField + Copy, const N: usize>(
+pub fn prune_by_weight<T: RealField + Float + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
     threshold: T,
 ) -> GaussianMixture<T, N> {
-    let components: Vec<_> = mixture
+    // Calculate the total weight of pruned components
+    let pruned_weight_sum: T = mixture
+        .iter()
+        .filter(|c| c.weight < threshold)
+        .fold(T::zero(), |acc, c| acc + c.weight);
+
+    // Collect remaining components
+    let mut remaining: Vec<_> = mixture
         .iter()
         .filter(|c| c.weight >= threshold)
         .cloned()
         .collect();
 
-    GaussianMixture::from_components(components)
+    // Redistribute pruned weights across remaining components
+    if !remaining.is_empty() && pruned_weight_sum > T::zero() {
+        let n_remaining = T::from(remaining.len()).unwrap();
+        let weight_per_component = pruned_weight_sum / n_remaining;
+        for component in &mut remaining {
+            component.weight = component.weight + weight_per_component;
+        }
+    }
+
+    GaussianMixture::from_components(remaining)
 }
 
 /// Truncates the mixture to keep only the top N components by weight.
+///
+/// The weights of truncated components are
+/// redistributed equally among the remaining components to preserve the
+/// total weight (expected target count in PHD filters).
 #[cfg(feature = "alloc")]
 pub fn truncate<T: RealField + Float + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
@@ -67,6 +91,7 @@ pub fn truncate<T: RealField + Float + Copy, const N: usize>(
         return mixture.clone();
     }
 
+    // Sort components by weight (highest first)
     let mut indexed: Vec<_> = mixture.iter().enumerate().collect();
     indexed.sort_by(|(_, a), (_, b)| {
         b.weight
@@ -74,13 +99,29 @@ pub fn truncate<T: RealField + Float + Copy, const N: usize>(
             .unwrap_or(core::cmp::Ordering::Equal)
     });
 
-    let components: Vec<_> = indexed
+    // Calculate the total weight of truncated components
+    let truncated_weight_sum: T = indexed
+        .iter()
+        .skip(max_components)
+        .fold(T::zero(), |acc, (_, c)| acc + c.weight);
+
+    // Collect the top components
+    let mut remaining: Vec<_> = indexed
         .into_iter()
         .take(max_components)
         .map(|(_, c)| c.clone())
         .collect();
 
-    GaussianMixture::from_components(components)
+    // Redistribute truncated weights across remaining components
+    if !remaining.is_empty() && truncated_weight_sum > T::zero() {
+        let n_remaining = T::from(remaining.len()).unwrap();
+        let weight_per_component = truncated_weight_sum / n_remaining;
+        for component in &mut remaining {
+            component.weight = component.weight + weight_per_component;
+        }
+    }
+
+    GaussianMixture::from_components(remaining)
 }
 
 /// Computes the squared Mahalanobis distance between two Gaussian components.
@@ -263,10 +304,12 @@ mod tests {
         mixture.push(make_component(0.001, 10.0, 10.0));
         mixture.push(make_component(0.3, 20.0, 20.0));
 
+        let original_total = mixture.total_weight();
         let pruned = prune_by_weight(&mixture, 0.01);
 
         assert_eq!(pruned.len(), 2);
-        assert!((pruned.total_weight() - 0.8).abs() < 1e-10);
+        // Weight should be preserved
+        assert!((pruned.total_weight() - original_total).abs() < 1e-10);
     }
 
     #[cfg(feature = "alloc")]
@@ -277,13 +320,13 @@ mod tests {
             mixture.push(make_component(i as f64 * 0.1, i as f64, 0.0));
         }
 
+        let original_total = mixture.total_weight();
         let truncated = truncate(&mixture, 3);
 
         assert_eq!(truncated.len(), 3);
 
-        // Should keep the three highest weights (0.9, 0.8, 0.7)
-        let weights: Vec<_> = truncated.iter().map(|c| c.weight).collect();
-        assert!(weights.iter().all(|&w| w >= 0.69));
+        // Weight should be preserved
+        assert!((truncated.total_weight() - original_total).abs() < 1e-10);
     }
 
     #[cfg(feature = "alloc")]
