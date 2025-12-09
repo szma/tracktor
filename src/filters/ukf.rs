@@ -797,14 +797,9 @@ mod tests {
         let params = UkfParams::default();
 
         // Linear transform: should recover exact statistics
-        let (transformed_mean, _) = unscented_transform(
-            &mean,
-            &cov,
-            &params,
-            |x| x.as_svector().clone_owned(),
-            None,
-        )
-        .unwrap();
+        let (transformed_mean, _) =
+            unscented_transform(&mean, &cov, &params, |x| x.as_svector().clone_owned(), None)
+                .unwrap();
 
         for i in 0..4 {
             assert!(
@@ -851,7 +846,11 @@ mod tests {
             "x: {} vs 110.0",
             pred_mean[0]
         );
-        assert!((pred_mean[1] - 0.0).abs() < 2.0, "y: {} vs 0.0", pred_mean[1]);
+        assert!(
+            (pred_mean[1] - 0.0).abs() < 2.0,
+            "y: {} vs 0.0",
+            pred_mean[1]
+        );
     }
 
     #[test]

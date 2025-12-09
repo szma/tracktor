@@ -462,7 +462,8 @@ mod tests {
     fn test_range_bearing_clutter_contains() {
         use core::f64::consts::PI;
 
-        let clutter = UniformClutterRangeBearing::new(10.0_f64, (10.0, 100.0), (-PI / 2.0, PI / 2.0));
+        let clutter =
+            UniformClutterRangeBearing::new(10.0_f64, (10.0, 100.0), (-PI / 2.0, PI / 2.0));
 
         // Inside: range 50, bearing 0
         let inside = Measurement::from_array([50.0, 0.0]);

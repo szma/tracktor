@@ -428,8 +428,7 @@ pub fn update_ekf<T: RealField + Copy, const N: usize, const M: usize>(
     let kalman_gain = compute_kalman_gain(&state.covariance, jacobian, &innovation_cov)?;
 
     let correction = kalman_gain.correct(&innovation);
-    let updated_mean =
-        StateVector::from_svector(state.mean.as_svector() + correction.as_svector());
+    let updated_mean = StateVector::from_svector(state.mean.as_svector() + correction.as_svector());
     let updated_cov = joseph_update(&state.covariance, &kalman_gain, jacobian, meas_noise);
 
     Some(EkfState {
@@ -445,7 +444,9 @@ pub fn update_ekf<T: RealField + Copy, const N: usize, const M: usize>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{ConstantVelocity2D, CoordinatedTurn2D, RangeBearingSensor, RangeBearingSensor5D};
+    use crate::models::{
+        ConstantVelocity2D, CoordinatedTurn2D, RangeBearingSensor, RangeBearingSensor5D,
+    };
 
     #[test]
     fn test_ekf_state_creation() {
@@ -536,9 +537,7 @@ mod tests {
         // High uncertainty state at (100, 0)
         let state = EkfState::new(
             StateVector::from_array([100.0, 0.0, 0.0, 0.0, 0.0]),
-            StateCovariance::from_matrix(
-                nalgebra::SMatrix::<f64, 5, 5>::identity().scale(1000.0),
-            ),
+            StateCovariance::from_matrix(nalgebra::SMatrix::<f64, 5, 5>::identity().scale(1000.0)),
         );
 
         // Measurement: range=100, bearing=0 (confirms position)
@@ -640,9 +639,8 @@ mod tests {
             0.0, 0.0, 1.0, 0.0;
             0.0, 0.0, 0.0, 1.0
         ]);
-        let process_noise = StateCovariance::from_matrix(
-            nalgebra::SMatrix::<f64, 4, 4>::identity().scale(0.1),
-        );
+        let process_noise =
+            StateCovariance::from_matrix(nalgebra::SMatrix::<f64, 4, 4>::identity().scale(0.1));
 
         let predicted = predict_ekf(&state, predicted_mean, &jacobian, &process_noise);
         assert!((predicted.mean.index(0) - 110.0).abs() < 1e-10);

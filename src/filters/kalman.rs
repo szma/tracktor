@@ -366,7 +366,9 @@ pub fn predict<T: RealField + Copy, const N: usize>(
     process_noise: &StateCovariance<T, N>,
 ) -> KalmanState<T, N> {
     let predicted_mean = transition.apply_state(&state.mean);
-    let predicted_cov = transition.propagate_covariance(&state.covariance).add(process_noise);
+    let predicted_cov = transition
+        .propagate_covariance(&state.covariance)
+        .add(process_noise);
 
     KalmanState {
         mean: predicted_mean,
@@ -401,8 +403,7 @@ pub fn update<T: RealField + Copy, const N: usize, const M: usize>(
 
     // Updated mean
     let correction = kalman_gain.correct(&innovation);
-    let updated_mean =
-        StateVector::from_svector(state.mean.as_svector() + correction.as_svector());
+    let updated_mean = StateVector::from_svector(state.mean.as_svector() + correction.as_svector());
 
     // Updated covariance (Joseph form)
     let updated_cov = joseph_update(&state.covariance, &kalman_gain, obs_matrix, meas_noise);
@@ -616,6 +617,9 @@ mod tests {
 
         // This compiles because dimensions match
         let _filter: KalmanFilter<f64, ConstantVelocity2D<f64>, PositionSensor2D<f64>, 4, 2> =
-            KalmanFilter::new(ConstantVelocity2D::new(1.0, 0.99), PositionSensor2D::new(1.0, 0.95));
+            KalmanFilter::new(
+                ConstantVelocity2D::new(1.0, 0.99),
+                PositionSensor2D::new(1.0, 0.95),
+            );
     }
 }

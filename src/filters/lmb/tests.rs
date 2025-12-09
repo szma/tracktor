@@ -26,10 +26,15 @@ use crate::filters::lmb::fusion::{
     ParallelUpdateMerger,
 };
 use crate::filters::lmb::lmbm::{extract_best_hypothesis, LmbmFilter, LmbmFilterState};
-use crate::filters::lmb::multisensor::{MultisensorLmbFilter, MultisensorLmbFilterBuilder, SensorConfig};
+use crate::filters::lmb::multisensor::{
+    MultisensorLmbFilter, MultisensorLmbFilterBuilder, SensorConfig,
+};
 use crate::filters::lmb::types::{LmbTrack, LmbTrackSet, LmbmHypothesis, LmbmState};
 use crate::filters::phd::Updated;
-use crate::models::{ClutterModel, ConstantVelocity2D, NonlinearObservationModel, ObservationModel, PositionSensor2D, RangeBearingSensor, UniformClutter2D, UniformClutterRangeBearing};
+use crate::models::{
+    ClutterModel, ConstantVelocity2D, NonlinearObservationModel, ObservationModel,
+    PositionSensor2D, RangeBearingSensor, UniformClutter2D, UniformClutterRangeBearing,
+};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
 use crate::types::spaces::{Measurement, MeasurementCovariance, StateCovariance, StateVector};
@@ -147,7 +152,13 @@ mod integration_tests {
         let dt = 1.0;
 
         // Run 5 steps with measurements tracking the target
-        let measurement_offsets = [(52.0, 51.0), (54.0, 52.0), (56.0, 53.0), (58.0, 54.0), (60.0, 55.0)];
+        let measurement_offsets = [
+            (52.0, 51.0),
+            (54.0, 52.0),
+            (56.0, 53.0),
+            (58.0, 54.0),
+            (60.0, 55.0),
+        ];
 
         for (t, (mx, my)) in measurement_offsets.iter().enumerate() {
             let measurements = vec![make_measurement(*mx, *my)];
@@ -222,8 +233,14 @@ mod integration_tests {
 
         // Verify labels are preserved
         let labels: Vec<Label> = estimates.iter().map(|e| e.label).collect();
-        assert!(labels.contains(&Label::new(0, 0)), "Label (0,0) should persist");
-        assert!(labels.contains(&Label::new(0, 1)), "Label (0,1) should persist");
+        assert!(
+            labels.contains(&Label::new(0, 0)),
+            "Label (0,0) should persist"
+        );
+        assert!(
+            labels.contains(&Label::new(0, 1)),
+            "Label (0,1) should persist"
+        );
     }
 
     #[test]
@@ -561,7 +578,7 @@ mod multi_target_tests {
 
         // Two targets that will cross paths
         let initial_tracks = vec![
-            make_track(Label::new(0, 0), 50.0, 100.0, 10.0, 0.0, 0.95),  // Moving right
+            make_track(Label::new(0, 0), 50.0, 100.0, 10.0, 0.0, 0.95), // Moving right
             make_track(Label::new(0, 1), 150.0, 100.0, -10.0, 0.0, 0.95), // Moving left
         ];
         let mut state = filter.initial_state_from(initial_tracks);
@@ -707,7 +724,11 @@ mod clutter_tests {
 
         // Should not establish false tracks (without birth model)
         let estimates = extract_lmb_estimates(&state);
-        assert_eq!(estimates.len(), 0, "Should not create tracks from clutter only");
+        assert_eq!(
+            estimates.len(),
+            0,
+            "Should not create tracks from clutter only"
+        );
     }
 
     #[test]
@@ -718,8 +739,12 @@ mod clutter_tests {
 
         // Low clutter first
         let clutter_low = UniformClutter2D::new(2.0, (0.0, 200.0), (0.0, 200.0));
-        let filter_low: LmbFilter<f64, _, _, _, _, 4, 2> =
-            LmbFilter::new(transition.clone(), observation.clone(), clutter_low, NoBirthModel);
+        let filter_low: LmbFilter<f64, _, _, _, _, 4, 2> = LmbFilter::new(
+            transition.clone(),
+            observation.clone(),
+            clutter_low,
+            NoBirthModel,
+        );
 
         // High clutter
         let clutter_high = UniformClutter2D::new(30.0, (0.0, 200.0), (0.0, 200.0));
@@ -926,7 +951,11 @@ mod numerical_stability_tests {
 
         // Existence should be valid (not NaN or infinite)
         let existence = updated.tracks.tracks[0].existence;
-        assert!(existence.is_finite(), "Existence should be finite: {}", existence);
+        assert!(
+            existence.is_finite(),
+            "Existence should be finite: {}",
+            existence
+        );
         assert!(existence >= 0.0, "Existence should be non-negative");
     }
 
@@ -936,7 +965,14 @@ mod numerical_stability_tests {
         let birth = NoBirthModel;
 
         // Track with existence very close to 1
-        let initial_tracks = vec![make_track(Label::new(0, 0), 100.0, 100.0, 0.0, 0.0, 0.9999999)];
+        let initial_tracks = vec![make_track(
+            Label::new(0, 0),
+            100.0,
+            100.0,
+            0.0,
+            0.0,
+            0.9999999,
+        )];
         let state: LmbFilterState<f64, 4, Updated> = LmbFilterState::from_tracks(initial_tracks);
 
         let predicted = state.predict(&transition, &birth, 1.0);
@@ -945,7 +981,11 @@ mod numerical_stability_tests {
 
         let existence = updated.tracks.tracks[0].existence;
         assert!(existence.is_finite());
-        assert!(existence <= 1.0, "Existence should not exceed 1: {}", existence);
+        assert!(
+            existence <= 1.0,
+            "Existence should not exceed 1: {}",
+            existence
+        );
     }
 
     #[test]
@@ -964,7 +1004,8 @@ mod numerical_stability_tests {
         let state = GaussianState::new(1.0, mean, cov);
         let track = LmbTrack::new(Label::new(0, 0), 0.9, state);
 
-        let filter_state: LmbFilterState<f64, 4, Updated> = LmbFilterState::from_tracks(vec![track]);
+        let filter_state: LmbFilterState<f64, 4, Updated> =
+            LmbFilterState::from_tracks(vec![track]);
         let predicted = filter_state.predict(&transition, &birth, 1.0);
         let measurements = vec![make_measurement(100.0, 100.0)];
         let (updated, _) = predicted.update(&measurements, &observation, &clutter);
@@ -992,7 +1033,8 @@ mod numerical_stability_tests {
         let state = GaussianState::new(1.0, mean, cov);
         let track = LmbTrack::new(Label::new(0, 0), 0.9, state);
 
-        let filter_state: LmbFilterState<f64, 4, Updated> = LmbFilterState::from_tracks(vec![track]);
+        let filter_state: LmbFilterState<f64, 4, Updated> =
+            LmbFilterState::from_tracks(vec![track]);
         let predicted = filter_state.predict(&transition, &birth, 1.0);
         let measurements = vec![make_measurement(100.0, 100.0)];
         let (updated, _) = predicted.update(&measurements, &observation, &clutter);
@@ -1119,7 +1161,11 @@ mod lmbm_tests {
         state.normalize_log_weights();
         state.keep_top_k(5);
 
-        assert_eq!(state.num_hypotheses(), 5, "Should keep only top 5 hypotheses");
+        assert_eq!(
+            state.num_hypotheses(),
+            5,
+            "Should keep only top 5 hypotheses"
+        );
     }
 
     #[test]
@@ -1137,8 +1183,12 @@ mod lmbm_tests {
         let track1 = BernoulliTrack::new(label, 0.9, gaussian.clone());
         let track2 = BernoulliTrack::new(label, 0.5, gaussian);
 
-        state.hypotheses.push(LmbmHypothesis::new(0.0, vec![track1])); // weight 1
-        state.hypotheses.push(LmbmHypothesis::new(-0.693, vec![track2])); // weight ~0.5
+        state
+            .hypotheses
+            .push(LmbmHypothesis::new(0.0, vec![track1])); // weight 1
+        state
+            .hypotheses
+            .push(LmbmHypothesis::new(-0.693, vec![track2])); // weight ~0.5
 
         let marginals = state.marginal_existence();
 
@@ -1355,7 +1405,11 @@ mod extraction_tests {
         let estimates = extract_lmb_estimates(&state);
 
         // MAP should extract 2 targets (highest existence)
-        assert_eq!(estimates.len(), 2, "Should extract 2 highest existence tracks");
+        assert_eq!(
+            estimates.len(),
+            2,
+            "Should extract 2 highest existence tracks"
+        );
 
         let labels: Vec<Label> = estimates.iter().map(|e| e.label).collect();
         assert!(labels.contains(&Label::new(0, 0)));
@@ -1375,7 +1429,11 @@ mod extraction_tests {
         let threshold_high = extract_lmb_estimates_threshold(&state, 0.5);
         let threshold_low = extract_lmb_estimates_threshold(&state, 0.2);
 
-        assert_eq!(threshold_high.len(), 2, "High threshold should get 2 tracks");
+        assert_eq!(
+            threshold_high.len(),
+            2,
+            "High threshold should get 2 tracks"
+        );
         assert_eq!(threshold_low.len(), 3, "Low threshold should get 3 tracks");
     }
 }
@@ -1401,7 +1459,10 @@ mod edge_cases {
         let measurements = vec![make_measurement(100.0, 100.0)];
         let (updated, stats) = predicted.update(&measurements, &observation, &clutter);
 
-        assert_eq!(stats.singular_covariance_count, 0, "Should not have singular covariances");
+        assert_eq!(
+            stats.singular_covariance_count, 0,
+            "Should not have singular covariances"
+        );
         assert!(
             updated.tracks.tracks[0].existence > 0.9,
             "Existence should increase with perfect match"
@@ -1501,7 +1562,10 @@ mod edge_cases {
             (*mean.index(0) - 1100.0).abs() < 0.1,
             "X should advance to 1100"
         );
-        assert!((*mean.index(1) - 600.0).abs() < 0.1, "Y should advance to 600");
+        assert!(
+            (*mean.index(1) - 600.0).abs() < 0.1,
+            "Y should advance to 600"
+        );
     }
 }
 
@@ -1628,7 +1692,10 @@ mod multisensor_fusion_tests {
 
         // Track should survive (one sensor detected)
         let estimates = extract_lmb_estimates_threshold(&updated, 0.3);
-        assert!(!estimates.is_empty(), "Track should survive partial detection");
+        assert!(
+            !estimates.is_empty(),
+            "Track should survive partial detection"
+        );
     }
 
     #[test]
@@ -1866,8 +1933,12 @@ mod multisensor_fusion_tests {
             let meas1 = vec![make_measurement(expected_x + 1.0, expected_y - 1.0)];
             let meas2 = vec![make_measurement(expected_x - 1.0, expected_y + 1.0)];
 
-            let (updated, _) =
-                filter.step(state, &[meas1, meas2], &[sensor1.clone(), sensor2.clone()], 1.0);
+            let (updated, _) = filter.step(
+                state,
+                &[meas1, meas2],
+                &[sensor1.clone(), sensor2.clone()],
+                1.0,
+            );
             state = updated;
         }
 
@@ -1999,7 +2070,11 @@ mod nonlinear_observation_tests {
         let db_dx: f64 = j.as_matrix()[(1, 0)];
         let db_dy: f64 = j.as_matrix()[(1, 1)];
 
-        assert!((dr_dx - 1.0).abs() < 0.01, "d_range/dx should be ~1: {}", dr_dx);
+        assert!(
+            (dr_dx - 1.0).abs() < 0.01,
+            "d_range/dx should be ~1: {}",
+            dr_dx
+        );
         assert!(dr_dy.abs() < 0.01, "d_range/dy should be ~0: {}", dr_dy);
         assert!(db_dx.abs() < 0.01, "d_bearing/dx should be ~0: {}", db_dx);
         assert!(
@@ -2040,7 +2115,11 @@ mod nonlinear_observation_tests {
         let state = StateVector::from_array([150.0, 50.0, 0.0, 0.0]);
         let (range, bearing): (f64, f64) = sensor.observe_nonlinear(&state);
 
-        assert!((range - 100.0).abs() < 0.01, "Range should be 100: {}", range);
+        assert!(
+            (range - 100.0).abs() < 0.01,
+            "Range should be 100: {}",
+            range
+        );
         assert!(
             bearing.abs() < 0.01,
             "Bearing should be ~0 (due east): {}",
@@ -2080,7 +2159,10 @@ mod nonlinear_observation_tests {
 
         // Track should survive
         let estimates = extract_lmb_estimates_threshold(&updated, 0.3);
-        assert!(!estimates.is_empty(), "Track should survive with range-bearing sensor");
+        assert!(
+            !estimates.is_empty(),
+            "Track should survive with range-bearing sensor"
+        );
     }
 
     #[test]
@@ -2159,10 +2241,7 @@ mod nonlinear_observation_tests {
             (b_var - expected_b_var).abs() < 1e-10,
             "Bearing variance should match"
         );
-        assert!(
-            off_diag.abs() < 1e-10,
-            "Off-diagonal should be zero"
-        );
+        assert!(off_diag.abs() < 1e-10, "Off-diagonal should be zero");
     }
 
     #[test]
@@ -2205,20 +2284,30 @@ mod nonlinear_observation_tests {
         let range = *measurement.index(0);
         let bearing = *measurement.index(1);
         assert!(range > 0.0, "Nonlinear observation produces range");
-        assert!(bearing.abs() < std::f64::consts::PI, "Bearing in valid range");
+        assert!(
+            bearing.abs() < std::f64::consts::PI,
+            "Bearing in valid range"
+        );
 
         // 2. Jacobian for linearization via trait: H = dh/dx
         let jacobian = NonlinearObservationModel::jacobian_at(&sensor, &state);
-        assert!(jacobian.is_some(), "Jacobian computable away from singularity");
+        assert!(
+            jacobian.is_some(),
+            "Jacobian computable away from singularity"
+        );
 
         // 3. Measurement noise via trait: R
-        let noise: MeasurementCovariance<f64, 2> = NonlinearObservationModel::measurement_noise(&sensor);
+        let noise: MeasurementCovariance<f64, 2> =
+            NonlinearObservationModel::measurement_noise(&sensor);
         assert!(noise.as_matrix()[(0, 0)] > 0.0, "Range noise positive");
         assert!(noise.as_matrix()[(1, 1)] > 0.0, "Bearing noise positive");
 
         // 4. Detection probability via trait
         let p_d = NonlinearObservationModel::detection_probability(&sensor, &state);
-        assert!((p_d - 0.9).abs() < 1e-10, "Detection probability should be 0.9");
+        assert!(
+            (p_d - 0.9).abs() < 1e-10,
+            "Detection probability should be 0.9"
+        );
     }
 
     /// Tests the update_ekf method with proper nonlinear observation model.
@@ -2240,8 +2329,8 @@ mod nonlinear_observation_tests {
         // Clutter in range-bearing measurement space (not Cartesian!)
         let clutter = UniformClutterRangeBearing::new(
             5.0,
-            (0.0, 500.0),   // range bounds
-            (-PI, PI),      // bearing bounds (full circle)
+            (0.0, 500.0), // range bounds
+            (-PI, PI),    // bearing bounds (full circle)
         );
 
         // Initialize with single track
@@ -2265,7 +2354,10 @@ mod nonlinear_observation_tests {
 
         // Track should survive with high existence
         let estimates = extract_lmb_estimates_threshold(&updated, 0.3);
-        assert!(!estimates.is_empty(), "Track should survive with EKF update");
+        assert!(
+            !estimates.is_empty(),
+            "Track should survive with EKF update"
+        );
         assert!(
             estimates[0].existence > 0.8,
             "Existence should be high after detection: {}",
@@ -2285,7 +2377,8 @@ mod nonlinear_observation_tests {
 
         // Target moving from (50, 50) with velocity (5, 5)
         let initial_tracks = vec![make_track(Label::new(0, 0), 50.0, 50.0, 5.0, 5.0, 0.9)];
-        let mut state: LmbFilterState<f64, 4, Updated> = LmbFilterState::from_tracks(initial_tracks);
+        let mut state: LmbFilterState<f64, 4, Updated> =
+            LmbFilterState::from_tracks(initial_tracks);
 
         // Track over 5 time steps
         for t in 0..5 {
@@ -2379,27 +2472,19 @@ mod nonlinear_observation_tests {
         // Clutter in range-bearing space
         let rb_clutter = UniformClutter2D::new(
             1.0,
-            (0.0, 500.0),    // range bounds
-            (-3.15, 3.15),   // bearing bounds
+            (0.0, 500.0),  // range bounds
+            (-3.15, 3.15), // bearing bounds
         );
 
         // Sensor 1: Range-bearing at origin
         let rb_sensor1 = RangeBearingSensor::new(10.0, 0.05, 0.9);
         let linearized_rb1 = LinearizedRangeBearingSensor::new(rb_sensor1.clone(), target_state);
-        let sensor1 = SensorConfig::new(
-            linearized_rb1,
-            rb_clutter.clone(),
-            0.5,
-        );
+        let sensor1 = SensorConfig::new(linearized_rb1, rb_clutter.clone(), 0.5);
 
         // Sensor 2: Another range-bearing sensor
         let rb_sensor2 = RangeBearingSensor::new(10.0, 0.05, 0.9);
         let linearized_rb2 = LinearizedRangeBearingSensor::new(rb_sensor2.clone(), target_state);
-        let sensor2 = SensorConfig::new(
-            linearized_rb2,
-            rb_clutter,
-            0.5,
-        );
+        let sensor2 = SensorConfig::new(linearized_rb2, rb_clutter, 0.5);
 
         // Generate measurements
         let (range1, bearing1) = rb_sensor1.observe_nonlinear(&target_state);
@@ -2410,7 +2495,10 @@ mod nonlinear_observation_tests {
         let (updated, _) = filter.step(state, &[meas1, meas2], &[sensor1, sensor2], 1.0);
 
         let estimates = extract_lmb_estimates_threshold(&updated, 0.3);
-        assert!(!estimates.is_empty(), "Multi-sensor range-bearing fusion should work");
+        assert!(
+            !estimates.is_empty(),
+            "Multi-sensor range-bearing fusion should work"
+        );
     }
 
     /// Demonstrates correct clutter model usage with range-bearing measurements.
@@ -2444,7 +2532,10 @@ mod nonlinear_observation_tests {
         let rb_clutter = UniformClutterRangeBearing::new(5.0, (0.0, 500.0), (-PI, PI));
 
         // Verify the measurement is within range-bearing clutter bounds
-        assert!(rb_clutter.contains(&measurement), "Measurement should be in RB clutter bounds");
+        assert!(
+            rb_clutter.contains(&measurement),
+            "Measurement should be in RB clutter bounds"
+        );
 
         // Both give valid densities, but only rb_clutter is semantically correct
         let _ = cartesian_clutter.clutter_density(&measurement);
@@ -2467,7 +2558,8 @@ mod nonlinear_observation_tests {
             make_track(Label::new(0, 0), 50.0, 50.0, 0.0, 0.0, 0.9),
             make_track(Label::new(0, 1), 150.0, 150.0, 0.0, 0.0, 0.9),
         ];
-        let mut state: LmbFilterState<f64, 4, Updated> = LmbFilterState::from_tracks(initial_tracks);
+        let mut state: LmbFilterState<f64, 4, Updated> =
+            LmbFilterState::from_tracks(initial_tracks);
 
         // Track for several steps
         for _ in 0..3 {
