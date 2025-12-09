@@ -255,6 +255,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                     let assigned_meas = assignment.get(i).copied().flatten();
                     let p_d = detection_probs[i];
 
+                    // Minimum value for ln() to prevent -infinity
+                    let ln_min = T::from_f64(1e-300).unwrap();
+
                     let (updated_state, r_updated) = if let Some(j) = assigned_meas {
                         // Detection
                         if let Some((mean, cov, likelihood)) = posteriors.get(i, j) {
@@ -263,7 +266,13 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                                 p_d,
                                 *likelihood,
                             );
-                            log_weight_delta += ComplexField::ln(*likelihood);
+                            // Guard against ln(0) when likelihood is zero
+                            let safe_likelihood = if *likelihood > ln_min {
+                                *likelihood
+                            } else {
+                                ln_min
+                            };
+                            log_weight_delta += ComplexField::ln(safe_likelihood);
                             (GaussianState::new(T::one(), *mean, *cov), r_updated)
                         } else {
                             (track.state.clone(), track.existence)
@@ -272,7 +281,14 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                         // Miss detection
                         let r_updated =
                             super::updaters::existence_update_miss(track.existence, p_d);
-                        log_weight_delta += ComplexField::ln(T::one() - p_d);
+                        // Guard against ln(0) when p_d is close to 1.0
+                        let one_minus_pd = T::one() - p_d;
+                        let safe_one_minus_pd = if one_minus_pd > ln_min {
+                            one_minus_pd
+                        } else {
+                            ln_min
+                        };
+                        log_weight_delta += ComplexField::ln(safe_one_minus_pd);
                         (track.state.clone(), r_updated)
                     };
 

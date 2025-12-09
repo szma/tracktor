@@ -333,7 +333,9 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
         let omega = *state.index(4);
 
         let omega_dt = omega * dt;
-        let eps = T::from_f64(1e-10).unwrap();
+        // Use 1e-5 threshold to ensure omega_sq (= omega^2) remains numerically safe
+        // for division operations. With eps=1e-5, omega_sq >= 1e-10.
+        let eps = T::from_f64(1e-5).unwrap();
 
         if num_traits::Float::abs(omega) < eps {
             // Nearly zero turn rate - use constant velocity
@@ -378,7 +380,9 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
         let omega = *state.index(4);
 
         let omega_dt = omega * dt;
-        let eps = T::from_f64(1e-10).unwrap();
+        // Use 1e-5 threshold to ensure omega_sq (= omega^2) remains numerically safe
+        // for division operations. With eps=1e-5, omega_sq >= 1e-10.
+        let eps = T::from_f64(1e-5).unwrap();
         let one = T::one();
         let zero = T::zero();
 

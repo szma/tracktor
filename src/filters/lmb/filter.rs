@@ -22,6 +22,47 @@ use crate::types::spaces::{ComputeInnovation, Measurement, StateCovariance, Stat
 use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gain, joseph_update};
 
 // ============================================================================
+// LBP Configuration
+// ============================================================================
+
+/// Configuration for Loopy Belief Propagation (LBP) data association.
+#[derive(Debug, Clone)]
+pub struct LbpConfig<T: RealField> {
+    /// Maximum number of LBP iterations
+    pub max_iterations: usize,
+    /// Convergence tolerance (maximum message change between iterations)
+    pub tolerance: T,
+}
+
+impl<T: RealField + Float> LbpConfig<T> {
+    /// Creates the default LBP configuration.
+    ///
+    /// Default values:
+    /// - `max_iterations`: 50
+    /// - `tolerance`: 1e-6
+    pub fn default_config() -> Self {
+        Self {
+            max_iterations: 50,
+            tolerance: T::from_f64(1e-6).unwrap(),
+        }
+    }
+
+    /// Creates a custom LBP configuration.
+    pub fn new(max_iterations: usize, tolerance: T) -> Self {
+        Self {
+            max_iterations,
+            tolerance,
+        }
+    }
+}
+
+impl<T: RealField + Float> Default for LbpConfig<T> {
+    fn default() -> Self {
+        Self::default_config()
+    }
+}
+
+// ============================================================================
 // Labeled Birth Model Trait
 // ============================================================================
 
@@ -187,7 +228,7 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
     /// Updates the LMB density with measurements.
     ///
     /// This method consumes the predicted state and returns an updated state.
-    /// Uses Loopy Belief Propagation for data association.
+    /// Uses Loopy Belief Propagation for data association with default parameters.
     pub fn update<const M: usize, Obs, Clutter>(
         self,
         measurements: &[Measurement<T, M>],
@@ -204,6 +245,30 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             clutter_model,
             50,
             T::from_f64(1e-6).unwrap(),
+        )
+    }
+
+    /// Updates the LMB density with measurements using configurable LBP parameters.
+    ///
+    /// This method allows customizing the Loopy Belief Propagation parameters
+    /// via an [`LbpConfig`] struct.
+    pub fn update_with_config<const M: usize, Obs, Clutter>(
+        self,
+        measurements: &[Measurement<T, M>],
+        observation_model: &Obs,
+        clutter_model: &Clutter,
+        lbp_config: &LbpConfig<T>,
+    ) -> (LmbFilterState<T, N, Updated>, UpdateStats)
+    where
+        Obs: ObservationModel<T, N, M>,
+        Clutter: ClutterModel<T, M>,
+    {
+        self.update_with_lbp(
+            measurements,
+            observation_model,
+            clutter_model,
+            lbp_config.max_iterations,
+            lbp_config.tolerance,
         )
     }
 
@@ -316,15 +381,20 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         }
 
         // Compute association weights using LBP
-        let (marginal_weights, existence_updates) = loopy_belief_propagation(
-            &likelihood_matrix,
-            &detection_probs,
-            &self.tracks.existence_probabilities(),
-            measurements,
-            clutter_model,
-            max_iterations,
-            tolerance,
-        );
+        let (marginal_weights, existence_updates, lbp_converged, lbp_iterations) =
+            loopy_belief_propagation(
+                &likelihood_matrix,
+                &detection_probs,
+                &self.tracks.existence_probabilities(),
+                measurements,
+                clutter_model,
+                max_iterations,
+                tolerance,
+            );
+
+        // Record LBP convergence info
+        stats.lbp_converged = Some(lbp_converged);
+        stats.lbp_iterations = Some(lbp_iterations);
 
         // Update tracks with association results
         for (i, track) in self.tracks.iter_mut().enumerate() {
@@ -428,6 +498,30 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             clutter_model,
             50,
             T::from_f64(1e-6).unwrap(),
+        )
+    }
+
+    /// Updates with EKF linearization using configurable LBP parameters.
+    ///
+    /// This method allows customizing the Loopy Belief Propagation parameters
+    /// via an [`LbpConfig`] struct.
+    pub fn update_ekf_with_config<const M: usize, Obs, Clutter>(
+        self,
+        measurements: &[Measurement<T, M>],
+        observation_model: &Obs,
+        clutter_model: &Clutter,
+        lbp_config: &LbpConfig<T>,
+    ) -> (LmbFilterState<T, N, Updated>, UpdateStats)
+    where
+        Obs: NonlinearObservationModel<T, N, M>,
+        Clutter: ClutterModel<T, M>,
+    {
+        self.update_ekf_with_lbp(
+            measurements,
+            observation_model,
+            clutter_model,
+            lbp_config.max_iterations,
+            lbp_config.tolerance,
         )
     }
 
@@ -553,15 +647,20 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         }
 
         // Compute association weights using LBP
-        let (marginal_weights, existence_updates) = loopy_belief_propagation(
-            &likelihood_matrix,
-            &detection_probs,
-            &self.tracks.existence_probabilities(),
-            measurements,
-            clutter_model,
-            max_iterations,
-            tolerance,
-        );
+        let (marginal_weights, existence_updates, lbp_converged, lbp_iterations) =
+            loopy_belief_propagation(
+                &likelihood_matrix,
+                &detection_probs,
+                &self.tracks.existence_probabilities(),
+                measurements,
+                clutter_model,
+                max_iterations,
+                tolerance,
+            );
+
+        // Record LBP convergence info
+        stats.lbp_converged = Some(lbp_converged);
+        stats.lbp_iterations = Some(lbp_iterations);
 
         // Update tracks with association results
         for (i, track) in self.tracks.iter_mut().enumerate() {
@@ -635,6 +734,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
 /// Returns:
 /// - Marginal association weights: [n_tracks][n_meas + 1] where index 0 is miss
 /// - Updated existence probabilities
+/// - Whether LBP converged (true if tolerance was met, false if max_iterations was hit)
+/// - Number of iterations run
 #[cfg(feature = "alloc")]
 fn loopy_belief_propagation<
     T: RealField + Float + Copy,
@@ -648,7 +749,7 @@ fn loopy_belief_propagation<
     clutter_model: &Clutter,
     max_iterations: usize,
     tolerance: T,
-) -> (Vec<Vec<T>>, Vec<T>) {
+) -> (Vec<Vec<T>>, Vec<T>, bool, usize) {
     let n_tracks = likelihood_matrix.len();
     let n_meas = if n_tracks > 0 {
         likelihood_matrix[0].len()
@@ -673,7 +774,8 @@ fn loopy_belief_propagation<
                 }
             })
             .collect();
-        return (weights, updated_existence);
+        // No iterations needed, considered converged
+        return (weights, updated_existence, true, 0);
     }
 
     // Compute clutter intensities
@@ -713,8 +815,12 @@ fn loopy_belief_propagation<
     let mut sigma_mt: Vec<Vec<T>> = vec![vec![T::one(); n_tracks]; n_meas];
     let mut sigma_tm: Vec<Vec<T>> = vec![vec![T::one(); n_meas]; n_tracks];
 
-    // LBP iterations
-    for _ in 0..max_iterations {
+    // LBP iterations - track convergence and iteration count
+    let mut lbp_converged = false;
+    let mut lbp_iterations = 0usize;
+
+    for iter in 0..max_iterations {
+        lbp_iterations = iter + 1;
         let sigma_mt_old = sigma_mt.clone();
 
         // Compute B = psi .* sigma_mt (element-wise)
@@ -775,6 +881,7 @@ fn loopy_belief_propagation<
             }
         }
         if max_delta < tolerance {
+            lbp_converged = true;
             break;
         }
     }
@@ -822,7 +929,12 @@ fn loopy_belief_propagation<
         updated_existence.push(r_updated);
     }
 
-    (marginal_weights, updated_existence)
+    (
+        marginal_weights,
+        updated_existence,
+        lbp_converged,
+        lbp_iterations,
+    )
 }
 
 // ============================================================================

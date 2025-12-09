@@ -41,13 +41,19 @@ pub struct UpdateStats {
     pub singular_covariance_count: usize,
     /// Number of components where likelihood computation returned zero or failed
     pub zero_likelihood_count: usize,
+    /// Whether LBP converged (None if LBP not used, Some(true) if converged, Some(false) if hit max iterations)
+    pub lbp_converged: Option<bool>,
+    /// Number of LBP iterations run (None if LBP not used)
+    pub lbp_iterations: Option<usize>,
 }
 
 #[cfg(feature = "alloc")]
 impl UpdateStats {
     /// Returns true if any numerical issues were encountered.
     pub fn has_issues(&self) -> bool {
-        self.singular_covariance_count > 0 || self.zero_likelihood_count > 0
+        self.singular_covariance_count > 0
+            || self.zero_likelihood_count > 0
+            || self.lbp_converged == Some(false)
     }
 }
 
