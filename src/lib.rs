@@ -20,8 +20,10 @@ pub mod types;
 pub mod utils;
 
 pub mod prelude {
+    pub use crate::filters::ekf::*;
     pub use crate::filters::kalman::*;
     pub use crate::filters::phd::*;
+    pub use crate::filters::ukf::*;
     pub use crate::models::*;
     pub use crate::types::gaussian::*;
     pub use crate::types::labels::*;
