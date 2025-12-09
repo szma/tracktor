@@ -1,4 +1,4 @@
-//! Example usage of the Tracktor library
+//! Basic multi-target tracking example
 //!
 //! Demonstrates a simple multi-target tracking scenario using the GM-PHD filter.
 
