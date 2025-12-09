@@ -1,6 +1,16 @@
 [package]
 name = "tracktor"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+
+[features]
+default = ["std"]
+std = ["alloc", "nalgebra/std"]
+alloc = ["nalgebra/alloc", "nalgebra/macros"]
 
 [dependencies]
+nalgebra = { version = "0.33", default-features = false }
+num-traits = { version = "0.2", default-features = false, features = ["libm"] }
+
+[dev-dependencies]
+rand = "0.8"
