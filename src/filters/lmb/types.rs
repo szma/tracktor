@@ -55,11 +55,7 @@ impl<T: RealField + Copy, const N: usize> LmbTrack<T, N> {
 
     /// Creates a new LMB track with multiple components.
     #[inline]
-    pub fn with_components(
-        label: Label,
-        existence: T,
-        components: GaussianMixture<T, N>,
-    ) -> Self {
+    pub fn with_components(label: Label, existence: T, components: GaussianMixture<T, N>) -> Self {
         Self {
             label,
             existence,
@@ -101,7 +97,10 @@ impl<T: RealField + Copy, const N: usize> LmbTrack<T, N> {
 
         let mut mean = StateVector::zeros();
         for component in self.components.iter() {
-            let scaled = component.mean.as_svector().scale(component.weight / total_weight);
+            let scaled = component
+                .mean
+                .as_svector()
+                .scale(component.weight / total_weight);
             mean = StateVector::from_svector(mean.as_svector() + scaled);
         }
         mean
@@ -285,10 +284,7 @@ impl<T: RealField + Copy, const N: usize, const MAX_COMPONENTS: usize>
     }
 
     /// Attempts to add a component. Returns Err if at capacity.
-    pub fn try_push(
-        &mut self,
-        component: GaussianState<T, N>,
-    ) -> Result<(), crate::TracktorError> {
+    pub fn try_push(&mut self, component: GaussianState<T, N>) -> Result<(), crate::TracktorError> {
         if self.num_components >= MAX_COMPONENTS {
             return Err(crate::TracktorError::MaxComponentsExceeded);
         }
@@ -400,7 +396,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmHypothesis<T, N> {
 
     /// Returns the expected cardinality for this hypothesis.
     pub fn expected_cardinality(&self) -> T {
-        self.tracks.iter().fold(T::zero(), |acc, t| acc + t.existence)
+        self.tracks
+            .iter()
+            .fold(T::zero(), |acc, t| acc + t.existence)
     }
 }
 
@@ -464,8 +462,7 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmState<T, N> {
 
     /// Prunes hypotheses with log weight below the threshold.
     pub fn prune_by_weight(&mut self, log_threshold: T) {
-        self.hypotheses
-            .retain(|h| h.log_weight >= log_threshold);
+        self.hypotheses.retain(|h| h.log_weight >= log_threshold);
     }
 
     /// Keeps only the top k hypotheses by weight.
@@ -655,9 +652,7 @@ mod tests {
     #[test]
     fn test_lmbm_state_normalization() {
         let mut state = LmbmState::<f64, 4>::new();
-        state
-            .hypotheses
-            .push(LmbmHypothesis::empty(-100.0)); // Very small weight
+        state.hypotheses.push(LmbmHypothesis::empty(-100.0)); // Very small weight
         state.hypotheses.push(LmbmHypothesis::empty(-99.0));
 
         state.normalize_log_weights();

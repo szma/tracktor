@@ -1,11 +1,15 @@
 //! Observation (sensor) models
 //!
 //! Describes how sensor measurements relate to target states.
+//!
+//! This module provides two observation model traits:
+//! - [`ObservationModel`]: For linear sensors where z = H*x + v
+//! - [`NonlinearObservationModel`]: For nonlinear sensors requiring EKF-style updates
 
 use nalgebra::RealField;
 use num_traits::Float;
 
-use crate::types::spaces::{MeasurementCovariance, StateVector};
+use crate::types::spaces::{Measurement, MeasurementCovariance, StateVector};
 use crate::types::transforms::ObservationMatrix;
 
 /// Trait for linear observation models.
@@ -14,13 +18,63 @@ use crate::types::transforms::ObservationMatrix;
 /// z = H * x + v
 ///
 /// where:
-/// - H is the observation matrix
+/// - H is the observation matrix (state-independent)
 /// - v is zero-mean Gaussian measurement noise with covariance R
+///
+/// For nonlinear sensors (e.g., range-bearing), use [`NonlinearObservationModel`] instead.
 pub trait ObservationModel<T: RealField, const N: usize, const M: usize> {
     /// Returns the observation matrix.
     fn observation_matrix(&self) -> ObservationMatrix<T, M, N>;
 
     /// Returns the measurement noise covariance.
+    fn measurement_noise(&self) -> MeasurementCovariance<T, M>;
+
+    /// Returns the probability of detection for a target at the given state.
+    ///
+    /// This may depend on the target state (e.g., reduced detection at range).
+    fn detection_probability(&self, state: &StateVector<T, N>) -> T;
+}
+
+/// Trait for nonlinear observation models requiring EKF-style updates.
+///
+/// Describes the nonlinear measurement process:
+/// z = h(x) + v
+///
+/// where:
+/// - h(x) is a nonlinear observation function
+/// - v is zero-mean Gaussian measurement noise with covariance R
+///
+/// For EKF updates, the observation function is linearized around the predicted state:
+/// H = ∂h/∂x evaluated at x_predicted
+///
+/// # Example
+///
+/// ```ignore
+/// // Range-bearing sensor
+/// let sensor = RangeBearingSensor::new(sigma_range, sigma_bearing, p_detection);
+///
+/// // Get predicted measurement
+/// let z_pred = sensor.observe(&predicted_state);
+///
+/// // Get Jacobian for linearization
+/// let H = sensor.jacobian_at(&predicted_state)?;
+///
+/// // Innovation is computed in measurement space
+/// let innovation = z_measured - z_pred;
+/// ```
+pub trait NonlinearObservationModel<T: RealField, const N: usize, const M: usize> {
+    /// Applies the nonlinear observation function: z = h(x)
+    ///
+    /// Returns the expected measurement for a target at the given state.
+    fn observe(&self, state: &StateVector<T, N>) -> Measurement<T, M>;
+
+    /// Returns the Jacobian ∂h/∂x evaluated at the given state.
+    ///
+    /// Returns `None` if the Jacobian is undefined or singular at the given state
+    /// (e.g., target at sensor position for range-bearing).
+    fn jacobian_at(&self, state: &StateVector<T, N>) -> Option<ObservationMatrix<T, M, N>>;
+
+    /// Returns the measurement noise covariance R.
     fn measurement_noise(&self) -> MeasurementCovariance<T, M>;
 
     /// Returns the probability of detection for a target at the given state.
@@ -386,6 +440,130 @@ impl<T: RealField + Float + Copy> RangeBearingSensor<T> {
     #[deprecated(since = "0.2.0", note = "Use observe_nonlinear() instead")]
     pub fn measure(&self, state: &StateVector<T, 4>) -> (T, T) {
         self.observe_nonlinear(state)
+    }
+}
+
+impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 4, 2> for RangeBearingSensor<T> {
+    fn observe(&self, state: &StateVector<T, 4>) -> Measurement<T, 2> {
+        let (range, bearing) = self.observe_nonlinear(state);
+        Measurement::from_array([range, bearing])
+    }
+
+    fn jacobian_at(&self, state: &StateVector<T, 4>) -> Option<ObservationMatrix<T, 2, 4>> {
+        // Delegate to existing method
+        RangeBearingSensor::jacobian_at(self, state)
+    }
+
+    fn measurement_noise(&self) -> MeasurementCovariance<T, 2> {
+        // Delegate to existing method
+        RangeBearingSensor::measurement_noise(self)
+    }
+
+    fn detection_probability(&self, state: &StateVector<T, 4>) -> T {
+        RangeBearingSensor::detection_probability(self, state)
+    }
+}
+
+/// Range-bearing sensor for 5D state (coordinated turn model).
+///
+/// Observes [range, bearing] from state [x, y, vx, vy, omega].
+/// The turn rate (omega) is not observed.
+///
+/// This is the same sensor as [`RangeBearingSensor`] but compatible with
+/// the [`CoordinatedTurn2D`] transition model.
+#[derive(Debug, Clone)]
+pub struct RangeBearingSensor5D<T: RealField> {
+    /// Underlying 4D sensor
+    inner: RangeBearingSensor<T>,
+}
+
+impl<T: RealField + Float + Copy> RangeBearingSensor5D<T> {
+    /// Creates a new range-bearing sensor at the origin for 5D state.
+    pub fn new(sigma_range: T, sigma_bearing: T, p_detection: T) -> Self {
+        Self {
+            inner: RangeBearingSensor::new(sigma_range, sigma_bearing, p_detection),
+        }
+    }
+
+    /// Creates a sensor at a specific position.
+    pub fn at_position(
+        sigma_range: T,
+        sigma_bearing: T,
+        p_detection: T,
+        sensor_x: T,
+        sensor_y: T,
+    ) -> Self {
+        Self {
+            inner: RangeBearingSensor::at_position(
+                sigma_range,
+                sigma_bearing,
+                p_detection,
+                sensor_x,
+                sensor_y,
+            ),
+        }
+    }
+
+    /// Computes the nonlinear measurement [range, bearing] for a given 5D state.
+    pub fn observe_nonlinear(&self, state: &StateVector<T, 5>) -> (T, T) {
+        let dx = *state.index(0) - self.inner.sensor_x;
+        let dy = *state.index(1) - self.inner.sensor_y;
+
+        let range = num_traits::Float::sqrt(dx * dx + dy * dy);
+        let bearing = num_traits::Float::atan2(dy, dx);
+
+        (range, bearing)
+    }
+
+    /// Returns the measurement noise covariance.
+    pub fn measurement_noise(&self) -> MeasurementCovariance<T, 2> {
+        self.inner.measurement_noise()
+    }
+
+    /// Returns the detection probability.
+    pub fn detection_probability(&self, _state: &StateVector<T, 5>) -> T {
+        self.inner.p_detection
+    }
+
+    /// Computes the Jacobian at the given 5D state.
+    pub fn jacobian_at(&self, state: &StateVector<T, 5>) -> Option<ObservationMatrix<T, 2, 5>> {
+        let dx = *state.index(0) - self.inner.sensor_x;
+        let dy = *state.index(1) - self.inner.sensor_y;
+
+        let r_sq = dx * dx + dy * dy;
+        let r = num_traits::Float::sqrt(r_sq);
+
+        let zero = T::zero();
+
+        if r < T::from_f64(1e-10).unwrap() {
+            return None;
+        }
+
+        // Jacobian: d[range, bearing]/d[x, y, vx, vy, omega]
+        // Only position affects range/bearing; velocity and omega have zero derivatives
+        Some(ObservationMatrix::from_matrix(nalgebra::matrix![
+            dx / r, dy / r, zero, zero, zero;
+            -dy / r_sq, dx / r_sq, zero, zero, zero
+        ]))
+    }
+}
+
+impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 5, 2> for RangeBearingSensor5D<T> {
+    fn observe(&self, state: &StateVector<T, 5>) -> Measurement<T, 2> {
+        let (range, bearing) = self.observe_nonlinear(state);
+        Measurement::from_array([range, bearing])
+    }
+
+    fn jacobian_at(&self, state: &StateVector<T, 5>) -> Option<ObservationMatrix<T, 2, 5>> {
+        RangeBearingSensor5D::jacobian_at(self, state)
+    }
+
+    fn measurement_noise(&self) -> MeasurementCovariance<T, 2> {
+        RangeBearingSensor5D::measurement_noise(self)
+    }
+
+    fn detection_probability(&self, state: &StateVector<T, 5>) -> T {
+        RangeBearingSensor5D::detection_probability(self, state)
     }
 }
 

@@ -69,9 +69,7 @@ pub fn elementary_symmetric_function<T: RealField + Copy>(z: &[T]) -> Vec<T> {
 ///
 /// * `T` - Scalar type
 /// * `N` - Maximum number of elements (tracks)
-pub fn elementary_symmetric_function_fixed<T: RealField + Copy, const N: usize>(
-    z: &[T],
-) -> [T; N] {
+pub fn elementary_symmetric_function_fixed<T: RealField + Copy, const N: usize>(z: &[T]) -> [T; N] {
     let mut result = [T::zero(); N];
     result[0] = T::one();
 
@@ -122,9 +120,7 @@ pub fn elementary_symmetric_function_fixed<T: RealField + Copy, const N: usize>(
 ///
 /// Vector [rho(0), rho(1), ..., rho(N)] where rho(k) is P(exactly k targets exist).
 #[cfg(feature = "alloc")]
-pub fn lmb_cardinality_distribution<T: RealField + Copy>(
-    existence_probs: &[T],
-) -> Vec<T> {
+pub fn lmb_cardinality_distribution<T: RealField + Copy>(existence_probs: &[T]) -> Vec<T> {
     if existence_probs.is_empty() {
         return vec![T::one()]; // rho(0) = 1 when no tracks
     }
@@ -139,7 +135,13 @@ pub fn lmb_cardinality_distribution<T: RealField + Copy>(
 
     for &r in existence_probs {
         // Clamp r to (epsilon, 1 - epsilon)
-        let r_clamped = if r < epsilon { epsilon } else if r > one_minus_eps { one_minus_eps } else { r };
+        let r_clamped = if r < epsilon {
+            epsilon
+        } else if r > one_minus_eps {
+            one_minus_eps
+        } else {
+            r
+        };
         let one_minus_r = T::one() - r_clamped;
         z.push(r_clamped / one_minus_r);
         prod_1_minus_r *= one_minus_r;
@@ -207,11 +209,7 @@ pub fn map_cardinality_estimate<T: RealField + Copy>(
 
     // Get indices sorted by existence probability (descending)
     let mut indices: Vec<usize> = (0..existence_probs.len()).collect();
-    indices.sort_by(|&a, &b| {
-        existence_probs[b]
-            .partial_cmp(&existence_probs[a])
-            .unwrap()
-    });
+    indices.sort_by(|&a, &b| existence_probs[b].partial_cmp(&existence_probs[a]).unwrap());
     indices.truncate(n_map);
 
     MapCardinalityResult {
@@ -225,9 +223,7 @@ pub fn map_cardinality_estimate<T: RealField + Copy>(
 ///
 /// This is a faster but less accurate alternative to MAP estimation.
 /// Returns round(sum(r_i)).
-pub fn simple_cardinality_estimate<T: RealField + Copy>(
-    existence_probs: &[T],
-) -> usize {
+pub fn simple_cardinality_estimate<T: RealField + Copy>(existence_probs: &[T]) -> usize {
     let total: T = existence_probs.iter().fold(T::zero(), |acc, &r| acc + r);
     // Use RealField's floor and add 0.5 for rounding
     let half = T::from_f64(0.5).unwrap();

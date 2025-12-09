@@ -123,7 +123,10 @@ fn create_vo_ma_scenario() -> Vec<GroundTruthTarget> {
 
 /// Get all ground truth positions at time t
 fn ground_truth_at(targets: &[GroundTruthTarget], t: usize) -> Vec<[f64; 2]> {
-    targets.iter().filter_map(|tgt| tgt.position_at(t)).collect()
+    targets
+        .iter()
+        .filter_map(|tgt| tgt.position_at(t))
+        .collect()
 }
 
 // ============================================================================
@@ -131,10 +134,7 @@ fn ground_truth_at(targets: &[GroundTruthTarget], t: usize) -> Vec<[f64; 2]> {
 // ============================================================================
 
 /// Generate measurements for a single time step
-fn generate_measurements(
-    ground_truth: &[[f64; 2]],
-    rng: &mut StdRng,
-) -> Vec<Measurement<f64, 2>> {
+fn generate_measurements(ground_truth: &[[f64; 2]], rng: &mut StdRng) -> Vec<Measurement<f64, 2>> {
     let mut measurements = Vec::new();
 
     // Generate detections from targets
@@ -195,12 +195,7 @@ fn poisson_sample(lambda: f64, rng: &mut StdRng) -> usize {
 /// Parameters:
 /// - c: Cutoff parameter (max per-target distance)
 /// - p: Order parameter (typically 1 or 2)
-fn compute_ospa(
-    estimates: &[[f64; 2]],
-    ground_truth: &[[f64; 2]],
-    c: f64,
-    p: f64,
-) -> OspaResult {
+fn compute_ospa(estimates: &[[f64; 2]], ground_truth: &[[f64; 2]], c: f64, p: f64) -> OspaResult {
     let m = estimates.len();
     let n = ground_truth.len();
 
@@ -441,7 +436,10 @@ fn main() {
     println!("======================================\n");
 
     println!("Simulation Parameters:");
-    println!("  Surveillance area: [{}, {}] x [{}, {}]", X_MIN, X_MAX, Y_MIN, Y_MAX);
+    println!(
+        "  Surveillance area: [{}, {}] x [{}, {}]",
+        X_MIN, X_MAX, Y_MIN, Y_MAX
+    );
     println!("  Time steps: {}", NUM_TIME_STEPS);
     println!("  Detection probability: {}", DETECTION_PROB);
     println!("  Clutter rate: {} per scan", CLUTTER_RATE);
@@ -498,21 +496,23 @@ fn main() {
 
     println!("Overall Performance:");
     println!("  Mean OSPA: {:.2} m", overall_mean_ospa);
-    println!("  Mean cardinality error: {:.2} targets\n", overall_mean_card_error);
+    println!(
+        "  Mean cardinality error: {:.2} targets\n",
+        overall_mean_card_error
+    );
 
     // Time-varying results (sample every 10 steps)
     println!("OSPA over time (mean ± std):");
-    println!("{:>6} {:>8} {:>12} {:>10}", "Time", "N_true", "OSPA", "Card Err");
+    println!(
+        "{:>6} {:>8} {:>12} {:>10}",
+        "Time", "N_true", "OSPA", "Card Err"
+    );
     println!("{:-<6} {:-<8} {:-<12} {:-<10}", "", "", "", "");
 
     for t in (0..NUM_TIME_STEPS).step_by(10) {
         println!(
             "{:>6} {:>8} {:>7.2} ± {:<4.2} {:>10.2}",
-            t,
-            true_cardinality[t],
-            mean_ospa[t],
-            std_ospa[t],
-            mean_card_error[t]
+            t, true_cardinality[t], mean_ospa[t], std_ospa[t], mean_card_error[t]
         );
     }
 
@@ -523,15 +523,24 @@ fn main() {
 
     // Early period (targets appearing)
     let early_ospa = mean(&mean_ospa[0..20]);
-    println!("  Early phase (t=0-20, targets appearing): OSPA = {:.2}", early_ospa);
+    println!(
+        "  Early phase (t=0-20, targets appearing): OSPA = {:.2}",
+        early_ospa
+    );
 
     // Mid period (maximum targets)
     let mid_ospa = mean(&mean_ospa[40..60]);
-    println!("  Peak phase (t=40-60, max targets): OSPA = {:.2}", mid_ospa);
+    println!(
+        "  Peak phase (t=40-60, max targets): OSPA = {:.2}",
+        mid_ospa
+    );
 
     // Late period (targets disappearing)
     let late_ospa = mean(&mean_ospa[80..100]);
-    println!("  Late phase (t=80-100, targets disappearing): OSPA = {:.2}", late_ospa);
+    println!(
+        "  Late phase (t=80-100, targets disappearing): OSPA = {:.2}",
+        late_ospa
+    );
 
     println!("\nBenchmark complete!");
 }

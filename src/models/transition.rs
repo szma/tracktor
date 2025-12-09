@@ -29,6 +29,43 @@ pub trait TransitionModel<T: RealField, const N: usize> {
     fn survival_probability(&self, state: &StateVector<T, N>) -> T;
 }
 
+/// Trait for nonlinear transition models requiring EKF/UKF-style updates.
+///
+/// Describes nonlinear target dynamics in the form:
+/// x_{k+1} = f(x_k, dt) + w
+///
+/// where:
+/// - f(x, dt) is a nonlinear state transition function
+/// - w is zero-mean Gaussian process noise with covariance Q
+///
+/// For EKF updates, the transition function is linearized around the current state:
+/// F = ∂f/∂x evaluated at x_current
+///
+/// # Example
+///
+/// ```ignore
+/// // Coordinated turn model
+/// let model = CoordinatedTurn2D::new(noise, turn_noise, survival);
+///
+/// // Nonlinear prediction
+/// let x_pred = model.predict_nonlinear(&state, dt);
+///
+/// // Jacobian for linearization (EKF)
+/// let F = model.jacobian_at(&state, dt);
+/// ```
+pub trait NonlinearTransitionModel<T: RealField, const N: usize>: TransitionModel<T, N> {
+    /// Applies the nonlinear transition function: x_{k+1} = f(x_k, dt)
+    ///
+    /// Returns the predicted state after time dt.
+    fn predict_nonlinear(&self, state: &StateVector<T, N>, dt: T) -> StateVector<T, N>;
+
+    /// Returns the Jacobian ∂f/∂x evaluated at the given state for time step dt.
+    ///
+    /// This is the transition matrix linearized around the given state,
+    /// suitable for use in an Extended Kalman Filter (EKF).
+    fn jacobian_at(&self, state: &StateVector<T, N>, dt: T) -> TransitionMatrix<T, N>;
+}
+
 // ============================================================================
 // Common Transition Models
 // ============================================================================
@@ -444,6 +481,16 @@ impl<T: RealField + Float + Copy> TransitionModel<T, 5> for CoordinatedTurn2D<T>
 
     fn survival_probability(&self, _state: &StateVector<T, 5>) -> T {
         self.p_survival
+    }
+}
+
+impl<T: RealField + Float + Copy> NonlinearTransitionModel<T, 5> for CoordinatedTurn2D<T> {
+    fn predict_nonlinear(&self, state: &StateVector<T, 5>, dt: T) -> StateVector<T, 5> {
+        CoordinatedTurn2D::predict_nonlinear(self, state, dt)
+    }
+
+    fn jacobian_at(&self, state: &StateVector<T, 5>, dt: T) -> TransitionMatrix<T, 5> {
+        CoordinatedTurn2D::transition_matrix_at(self, state, dt)
     }
 }
 
