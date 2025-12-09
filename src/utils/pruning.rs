@@ -70,7 +70,7 @@ pub fn prune_by_weight<T: RealField + Float + Copy, const N: usize>(
         let n_remaining = T::from(remaining.len()).unwrap();
         let weight_per_component = pruned_weight_sum / n_remaining;
         for component in &mut remaining {
-            component.weight = component.weight + weight_per_component;
+            component.weight += weight_per_component;
         }
     }
 
@@ -117,7 +117,7 @@ pub fn truncate<T: RealField + Float + Copy, const N: usize>(
         let n_remaining = T::from(remaining.len()).unwrap();
         let weight_per_component = truncated_weight_sum / n_remaining;
         for component in &mut remaining {
-            component.weight = component.weight + weight_per_component;
+            component.weight += weight_per_component;
         }
     }
 

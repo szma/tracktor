@@ -12,7 +12,7 @@ fn main() {
 
     // Create models
     let transition = ConstantVelocity2D::new(
-        1.0,  // Process noise (acceleration std)
+        1.0,  // Velocity noise diffusion coefficient
         0.99, // Survival probability
     );
 
