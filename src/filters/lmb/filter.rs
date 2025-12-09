@@ -784,19 +784,6 @@ fn loopy_belief_propagation<
         .map(|z| clutter_model.clutter_intensity(z))
         .collect();
 
-    // Compute psi matrix: psi[i][j] = r * p_d * L[i][j] / kappa[j]
-    let mut psi: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
-    for i in 0..n_tracks {
-        let r = existence_probs[i];
-        let p_d = detection_probs[i];
-        for j in 0..n_meas {
-            let kappa = clutter_intensities[j];
-            if kappa > T::zero() {
-                psi[i][j] = r * p_d * likelihood_matrix[i][j] / kappa;
-            }
-        }
-    }
-
     // Compute phi vector: phi[i] = r * (1 - p_d)
     let phi: Vec<T> = existence_probs
         .iter()
@@ -804,12 +791,25 @@ fn loopy_belief_propagation<
         .map(|(&r, &p_d)| r * (T::one() - p_d))
         .collect();
 
-    // Compute eta vector: eta[i] = 1 - r + r * (1 - p_d) = 1 - r * p_d
+    // Compute eta vector: eta[i] = 1 - r * p_d
     let eta: Vec<T> = existence_probs
         .iter()
         .zip(detection_probs.iter())
         .map(|(&r, &p_d)| T::one() - r * p_d)
         .collect();
+
+    // Compute psi matrix: psi[i][j] = r * p_d * L[i][j] / (kappa[j] * eta[i])
+    let mut psi: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
+    for i in 0..n_tracks {
+        let r = existence_probs[i];
+        let p_d = detection_probs[i];
+        for j in 0..n_meas {
+            let kappa = clutter_intensities[j];
+            if kappa > T::zero() && eta[i] > T::zero() {
+                psi[i][j] = r * p_d * likelihood_matrix[i][j] / (kappa * eta[i]);
+            }
+        }
+    }
 
     // Initialize messages: sigma[i][j] = 1
     let mut sigma_mt: Vec<Vec<T>> = vec![vec![T::one(); n_tracks]; n_meas];
