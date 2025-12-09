@@ -12,9 +12,10 @@
 //! - OSPA (Optimal Sub-Pattern Assignment) metric
 //! - Monte Carlo simulation for statistical evaluation
 
-use rand::distributions::{Distribution, Uniform};
+use rand::distr::Uniform;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rand_distr::Distribution;
 
 use tracktor::filters::phd::GmPhdFilter;
 use tracktor::prelude::*;
@@ -140,7 +141,7 @@ fn generate_measurements(
     let normal = rand_distr::Normal::new(0.0, MEASUREMENT_NOISE_STD).unwrap();
     for &[x, y] in ground_truth {
         // Detection probability
-        if rng.gen::<f64>() < DETECTION_PROB {
+        if rng.random::<f64>() < DETECTION_PROB {
             let noise_x: f64 = normal.sample(rng);
             let noise_y: f64 = normal.sample(rng);
             measurements.push(Measurement::from_array([x + noise_x, y + noise_y]));
@@ -149,8 +150,8 @@ fn generate_measurements(
 
     // Generate Poisson-distributed clutter
     let num_clutter = poisson_sample(CLUTTER_RATE, rng);
-    let x_dist = Uniform::new(X_MIN, X_MAX);
-    let y_dist = Uniform::new(Y_MIN, Y_MAX);
+    let x_dist = Uniform::new(X_MIN, X_MAX).unwrap();
+    let y_dist = Uniform::new(Y_MIN, Y_MAX).unwrap();
 
     for _ in 0..num_clutter {
         let cx = x_dist.sample(rng);
@@ -173,7 +174,7 @@ fn poisson_sample(lambda: f64, rng: &mut StdRng) -> usize {
 
     loop {
         k += 1;
-        p *= rng.gen::<f64>();
+        p *= rng.random::<f64>();
         if p <= l {
             break;
         }
