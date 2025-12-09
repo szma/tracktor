@@ -8,8 +8,8 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::spaces::{StateVector, StateCovariance};
-use crate::types::gaussian::{GaussianState, GaussianMixture};
+use crate::types::gaussian::{GaussianMixture, GaussianState};
+use crate::types::spaces::{StateCovariance, StateVector};
 
 /// Configuration for pruning and merging operations.
 #[derive(Debug, Clone)]
@@ -48,7 +48,8 @@ pub fn prune_by_weight<T: RealField + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
     threshold: T,
 ) -> GaussianMixture<T, N> {
-    let components: Vec<_> = mixture.iter()
+    let components: Vec<_> = mixture
+        .iter()
         .filter(|c| c.weight >= threshold)
         .cloned()
         .collect();
@@ -68,10 +69,13 @@ pub fn truncate<T: RealField + Float + Copy, const N: usize>(
 
     let mut indexed: Vec<_> = mixture.iter().enumerate().collect();
     indexed.sort_by(|(_, a), (_, b)| {
-        b.weight.partial_cmp(&a.weight).unwrap_or(core::cmp::Ordering::Equal)
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(core::cmp::Ordering::Equal)
     });
 
-    let components: Vec<_> = indexed.into_iter()
+    let components: Vec<_> = indexed
+        .into_iter()
         .take(max_components)
         .map(|(_, c)| c.clone())
         .collect();
@@ -120,7 +124,8 @@ pub fn merge_components<T: RealField + Float + Copy, const N: usize>(
 
     // Merged mean: weighted average
     let mean = StateVector::from_svector(
-        (a.mean.as_svector().scale(a.weight) + b.mean.as_svector().scale(b.weight)).scale(T::one() / w_sum)
+        (a.mean.as_svector().scale(a.weight) + b.mean.as_svector().scale(b.weight))
+            .scale(T::one() / w_sum),
     );
 
     // Merged covariance: weighted average plus spread of means
@@ -131,10 +136,11 @@ pub fn merge_components<T: RealField + Float + Copy, const N: usize>(
     let spread_b = diff_b.as_svector() * diff_b.as_svector().transpose();
 
     let merged_cov = StateCovariance::from_matrix(
-        (a.covariance.as_matrix().scale(a.weight) +
-         b.covariance.as_matrix().scale(b.weight) +
-         spread_a.scale(a.weight) +
-         spread_b.scale(b.weight)).scale(T::one() / w_sum)
+        (a.covariance.as_matrix().scale(a.weight)
+            + b.covariance.as_matrix().scale(b.weight)
+            + spread_a.scale(a.weight)
+            + spread_b.scale(b.weight))
+        .scale(T::one() / w_sum),
     );
 
     Some(GaussianState::new(w_sum, mean, merged_cov))
@@ -156,8 +162,14 @@ pub fn merge_nearby<T: RealField + Float + Copy, const N: usize>(
 
     while !remaining.is_empty() {
         // Find component with highest weight
-        let max_idx = remaining.iter().enumerate()
-            .max_by(|(_, a), (_, b)| a.weight.partial_cmp(&b.weight).unwrap_or(core::cmp::Ordering::Equal))
+        let max_idx = remaining
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                a.weight
+                    .partial_cmp(&b.weight)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            })
             .map(|(i, _)| i)
             .unwrap();
 

@@ -57,8 +57,14 @@ impl<T: RealField + Float + Copy, const M: usize> UniformClutter<T, M> {
     /// Panics if `volume <= 0` or `clutter_rate < 0`.
     pub fn new(clutter_rate: T, volume: T) -> Self {
         assert!(volume > T::zero(), "Clutter volume must be positive");
-        assert!(clutter_rate >= T::zero(), "Clutter rate must be non-negative");
-        Self { clutter_rate, volume }
+        assert!(
+            clutter_rate >= T::zero(),
+            "Clutter rate must be non-negative"
+        );
+        Self {
+            clutter_rate,
+            volume,
+        }
     }
 
     /// Creates a uniform clutter model from region bounds.
@@ -70,14 +76,20 @@ impl<T: RealField + Float + Copy, const M: usize> UniformClutter<T, M> {
     /// # Panics
     /// Panics if any dimension has `max <= min` or `clutter_rate < 0`.
     pub fn from_bounds(clutter_rate: T, bounds: [(T, T); M]) -> Self {
-        assert!(clutter_rate >= T::zero(), "Clutter rate must be non-negative");
+        assert!(
+            clutter_rate >= T::zero(),
+            "Clutter rate must be non-negative"
+        );
         for (i, (min, max)) in bounds.iter().enumerate() {
             assert!(*max > *min, "Bound {} must have max > min", i);
         }
-        let volume = bounds.iter().fold(T::one(), |acc, (min, max)| {
-            acc * (*max - *min)
-        });
-        Self { clutter_rate, volume }
+        let volume = bounds
+            .iter()
+            .fold(T::one(), |acc, (min, max)| acc * (*max - *min));
+        Self {
+            clutter_rate,
+            volume,
+        }
     }
 }
 
@@ -115,11 +127,19 @@ impl<T: RealField + Float + Copy> UniformClutter2D<T> {
     /// # Panics
     /// Panics if bounds are invalid or clutter_rate is negative.
     pub fn new(clutter_rate: T, x_bounds: (T, T), y_bounds: (T, T)) -> Self {
-        assert!(clutter_rate >= T::zero(), "Clutter rate must be non-negative");
+        assert!(
+            clutter_rate >= T::zero(),
+            "Clutter rate must be non-negative"
+        );
         assert!(x_bounds.1 > x_bounds.0, "x_bounds must have max > min");
         assert!(y_bounds.1 > y_bounds.0, "y_bounds must have max > min");
         let area = (x_bounds.1 - x_bounds.0) * (y_bounds.1 - y_bounds.0);
-        Self { clutter_rate, x_bounds, y_bounds, area }
+        Self {
+            clutter_rate,
+            x_bounds,
+            y_bounds,
+            area,
+        }
     }
 
     /// Checks if a measurement is within the surveillance region.
@@ -127,8 +147,7 @@ impl<T: RealField + Float + Copy> UniformClutter2D<T> {
         let x = *measurement.index(0);
         let y = *measurement.index(1);
 
-        x >= self.x_bounds.0 && x <= self.x_bounds.1 &&
-        y >= self.y_bounds.0 && y <= self.y_bounds.1
+        x >= self.x_bounds.0 && x <= self.x_bounds.1 && y >= self.y_bounds.0 && y <= self.y_bounds.1
     }
 }
 
@@ -169,14 +188,22 @@ impl<T: RealField + Float + Copy> UniformClutter3D<T> {
     /// # Panics
     /// Panics if bounds are invalid or clutter_rate is negative.
     pub fn new(clutter_rate: T, x_bounds: (T, T), y_bounds: (T, T), z_bounds: (T, T)) -> Self {
-        assert!(clutter_rate >= T::zero(), "Clutter rate must be non-negative");
+        assert!(
+            clutter_rate >= T::zero(),
+            "Clutter rate must be non-negative"
+        );
         assert!(x_bounds.1 > x_bounds.0, "x_bounds must have max > min");
         assert!(y_bounds.1 > y_bounds.0, "y_bounds must have max > min");
         assert!(z_bounds.1 > z_bounds.0, "z_bounds must have max > min");
-        let volume = (x_bounds.1 - x_bounds.0) *
-                     (y_bounds.1 - y_bounds.0) *
-                     (z_bounds.1 - z_bounds.0);
-        Self { clutter_rate, x_bounds, y_bounds, z_bounds, volume }
+        let volume =
+            (x_bounds.1 - x_bounds.0) * (y_bounds.1 - y_bounds.0) * (z_bounds.1 - z_bounds.0);
+        Self {
+            clutter_rate,
+            x_bounds,
+            y_bounds,
+            z_bounds,
+            volume,
+        }
     }
 }
 
@@ -222,12 +249,19 @@ impl<T: RealField + Float + Copy, const M: usize> GaussianClutter<T, M> {
         mean: Measurement<T, M>,
         covariance: crate::types::spaces::MeasurementCovariance<T, M>,
     ) -> Self {
-        assert!(clutter_rate >= T::zero(), "Clutter rate must be non-negative");
+        assert!(
+            clutter_rate >= T::zero(),
+            "Clutter rate must be non-negative"
+        );
         assert!(
             covariance.determinant_cholesky().is_some(),
             "Clutter covariance must be positive definite"
         );
-        Self { clutter_rate, mean, covariance }
+        Self {
+            clutter_rate,
+            mean,
+            covariance,
+        }
     }
 }
 
@@ -243,8 +277,11 @@ impl<T: RealField + Float + Copy, const M: usize> ClutterModel<T, M> for Gaussia
         // Note: We validated in constructor that covariance is positive definite,
         // so this should not fail. If it does, return zero (very low density).
         let diff = measurement.innovation(self.mean);
-        crate::types::gaussian::gaussian_likelihood(&diff, &crate::types::spaces::Covariance::from_matrix(*self.covariance.as_matrix()))
-            .unwrap_or(T::zero())
+        crate::types::gaussian::gaussian_likelihood(
+            &diff,
+            &crate::types::spaces::Covariance::from_matrix(*self.covariance.as_matrix()),
+        )
+        .unwrap_or(T::zero())
     }
 }
 

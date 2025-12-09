@@ -13,19 +13,19 @@
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
-pub mod types;
-pub mod models;
-pub mod filters;
 pub mod assignment;
+pub mod filters;
+pub mod models;
+pub mod types;
 pub mod utils;
 
 pub mod prelude {
-    pub use crate::types::spaces::*;
-    pub use crate::types::transforms::*;
+    pub use crate::filters::phd::*;
+    pub use crate::models::*;
     pub use crate::types::gaussian::*;
     pub use crate::types::labels::*;
-    pub use crate::models::*;
-    pub use crate::filters::phd::*;
+    pub use crate::types::spaces::*;
+    pub use crate::types::transforms::*;
     pub use crate::utils::*;
 }
 

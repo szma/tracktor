@@ -10,10 +10,10 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use super::spaces::{StateVector, StateCovariance, Measurement, MeasurementCovariance};
+use super::spaces::{Measurement, MeasurementCovariance, StateCovariance, StateVector};
 use super::transforms::{
-    ObservationMatrix, TransitionMatrix,
-    compute_kalman_gain, compute_innovation_covariance, joseph_update,
+    compute_innovation_covariance, compute_kalman_gain, joseph_update, ObservationMatrix,
+    TransitionMatrix,
 };
 
 // ============================================================================
@@ -38,7 +38,11 @@ impl<T: RealField + Copy, const N: usize> GaussianState<T, N> {
     /// Creates a new Gaussian component.
     #[inline]
     pub fn new(weight: T, mean: StateVector<T, N>, covariance: StateCovariance<T, N>) -> Self {
-        Self { weight, mean, covariance }
+        Self {
+            weight,
+            mean,
+            covariance,
+        }
     }
 
     /// Creates a Gaussian with unit weight.
@@ -69,7 +73,8 @@ impl<T: RealField + Copy, const N: usize> GaussianState<T, N> {
         process_noise: &StateCovariance<T, N>,
     ) -> Self {
         let predicted_mean = transition.apply_state(&self.mean);
-        let predicted_cov = transition.propagate_covariance(&self.covariance)
+        let predicted_cov = transition
+            .propagate_covariance(&self.covariance)
             .add(process_noise);
 
         Self {
@@ -95,32 +100,19 @@ impl<T: RealField + Copy, const N: usize> GaussianState<T, N> {
         let innovation = measurement.innovation(predicted_meas);
 
         // Innovation covariance
-        let innovation_cov = compute_innovation_covariance(
-            &self.covariance,
-            obs_matrix,
-            meas_noise,
-        );
+        let innovation_cov =
+            compute_innovation_covariance(&self.covariance, obs_matrix, meas_noise);
 
         // Kalman gain
-        let kalman_gain = compute_kalman_gain(
-            &self.covariance,
-            obs_matrix,
-            &innovation_cov,
-        )?;
+        let kalman_gain = compute_kalman_gain(&self.covariance, obs_matrix, &innovation_cov)?;
 
         // Updated mean
         let correction = kalman_gain.correct(&innovation);
-        let updated_mean = StateVector::from_svector(
-            self.mean.as_svector() + correction.as_svector()
-        );
+        let updated_mean =
+            StateVector::from_svector(self.mean.as_svector() + correction.as_svector());
 
         // Updated covariance (Joseph form for numerical stability)
-        let updated_cov = joseph_update(
-            &self.covariance,
-            &kalman_gain,
-            obs_matrix,
-            meas_noise,
-        );
+        let updated_cov = joseph_update(&self.covariance, &kalman_gain, obs_matrix, meas_noise);
 
         Some(Self {
             weight: self.weight,
@@ -150,14 +142,12 @@ impl<T: RealField + Copy, const N: usize> GaussianState<T, N> {
         let innovation = measurement.innovation(predicted_meas);
 
         // Innovation covariance: S = H * P * H^T + R
-        let innovation_cov = compute_innovation_covariance(
-            &self.covariance,
-            obs_matrix,
-            meas_noise,
-        );
+        let innovation_cov =
+            compute_innovation_covariance(&self.covariance, obs_matrix, meas_noise);
 
         // Compute Gaussian likelihood - convert covariance to innovation space
-        let innovation_cov_typed = super::spaces::Covariance::from_matrix(*innovation_cov.as_matrix());
+        let innovation_cov_typed =
+            super::spaces::Covariance::from_matrix(*innovation_cov.as_matrix());
         gaussian_likelihood(&innovation, &innovation_cov_typed)
     }
 }
@@ -195,7 +185,8 @@ pub fn gaussian_likelihood<T: RealField + Float + Copy, Space, const M: usize>(
     // Normalization constant
     let m = T::from(M).unwrap();
     let two_pi = T::from(2.0 * PI).unwrap();
-    let norm = num_traits::Float::powf(two_pi, m / T::from(2.0).unwrap()) * num_traits::Float::sqrt(det);
+    let norm =
+        num_traits::Float::powf(two_pi, m / T::from(2.0).unwrap()) * num_traits::Float::sqrt(det);
 
     // Likelihood
     let half = T::from(0.5).unwrap();
@@ -225,7 +216,8 @@ pub fn gaussian_log_likelihood<T: RealField + Float + Copy, Space, const M: usiz
     // Log normalization constant
     let m = T::from(M).unwrap();
     let two_pi = T::from(2.0 * PI).unwrap();
-    let log_norm = (m / T::from(2.0).unwrap()) * num_traits::Float::ln(two_pi) + num_traits::Float::ln(det) / T::from(2.0).unwrap();
+    let log_norm = (m / T::from(2.0).unwrap()) * num_traits::Float::ln(two_pi)
+        + num_traits::Float::ln(det) / T::from(2.0).unwrap();
 
     // Log likelihood
     let half = T::from(0.5).unwrap();
@@ -274,7 +266,8 @@ pub fn innovation_likelihood<T: RealField + Float + Copy, const M: usize>(
     // Normalization constant
     let m = T::from(M).unwrap();
     let two_pi = T::from(2.0 * PI).unwrap();
-    let norm = num_traits::Float::powf(two_pi, m / T::from(2.0).unwrap()) * num_traits::Float::sqrt(det);
+    let norm =
+        num_traits::Float::powf(two_pi, m / T::from(2.0).unwrap()) * num_traits::Float::sqrt(det);
 
     // Likelihood
     let half = T::from(0.5).unwrap();
@@ -298,13 +291,17 @@ impl<T: RealField + Copy, const N: usize> GaussianMixture<T, N> {
     /// Creates an empty mixture.
     #[inline]
     pub fn new() -> Self {
-        Self { components: Vec::new() }
+        Self {
+            components: Vec::new(),
+        }
     }
 
     /// Creates a mixture with the given capacity.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
-        Self { components: Vec::with_capacity(capacity) }
+        Self {
+            components: Vec::with_capacity(capacity),
+        }
     }
 
     /// Creates a mixture from a vector of components.
@@ -339,7 +336,9 @@ impl<T: RealField + Copy, const N: usize> GaussianMixture<T, N> {
 
     /// Returns the total weight (expected number of targets for PHD).
     pub fn total_weight(&self) -> T {
-        self.components.iter().fold(T::zero(), |acc, c| acc + c.weight)
+        self.components
+            .iter()
+            .fold(T::zero(), |acc, c| acc + c.weight)
     }
 
     /// Iterates over the components.
@@ -436,7 +435,9 @@ impl<T: RealField + Copy, const N: usize, const MAX: usize> FixedGaussianMixture
     /// Iterates over the components.
     pub fn iter(&self) -> impl Iterator<Item = &GaussianState<T, N>> {
         // SAFETY: elements 0..self.len are initialized
-        self.components[..self.len].iter().map(|c| unsafe { c.assume_init_ref() })
+        self.components[..self.len]
+            .iter()
+            .map(|c| unsafe { c.assume_init_ref() })
     }
 
     /// Returns a slice of the components.
@@ -471,7 +472,9 @@ impl<T: RealField + Copy, const N: usize, const MAX: usize> FixedGaussianMixture
     }
 }
 
-impl<T: RealField + Copy, const N: usize, const MAX: usize> Default for FixedGaussianMixture<T, N, MAX> {
+impl<T: RealField + Copy, const N: usize, const MAX: usize> Default
+    for FixedGaussianMixture<T, N, MAX>
+{
     fn default() -> Self {
         Self::new()
     }
@@ -488,7 +491,9 @@ impl<T: RealField, const N: usize, const MAX: usize> Drop for FixedGaussianMixtu
     }
 }
 
-impl<T: RealField + Copy, const N: usize, const MAX: usize> Clone for FixedGaussianMixture<T, N, MAX> {
+impl<T: RealField + Copy, const N: usize, const MAX: usize> Clone
+    for FixedGaussianMixture<T, N, MAX>
+{
     fn clone(&self) -> Self {
         let mut new = Self::new();
         for component in self.iter() {
@@ -501,7 +506,9 @@ impl<T: RealField + Copy, const N: usize, const MAX: usize> Clone for FixedGauss
     }
 }
 
-impl<T: RealField + Copy + core::fmt::Debug, const N: usize, const MAX: usize> core::fmt::Debug for FixedGaussianMixture<T, N, MAX> {
+impl<T: RealField + Copy + core::fmt::Debug, const N: usize, const MAX: usize> core::fmt::Debug
+    for FixedGaussianMixture<T, N, MAX>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("FixedGaussianMixture")
             .field("components", &self.as_slice())
@@ -538,7 +545,8 @@ mod tests {
             0.0, 0.0, 1.0, 0.0;
             0.0, 0.0, 0.0, 1.0
         ]);
-        let q = StateCovariance::from_matrix(nalgebra::SMatrix::<f64, 4, 4>::identity().scale(0.01));
+        let q =
+            StateCovariance::from_matrix(nalgebra::SMatrix::<f64, 4, 4>::identity().scale(0.01));
 
         let predicted = gs.predict(&f, &q);
 

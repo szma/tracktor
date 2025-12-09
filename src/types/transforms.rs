@@ -4,12 +4,11 @@
 //! encoding of source and target spaces.
 
 use ::core::marker::PhantomData;
-use nalgebra::{SMatrix, RealField, Scalar};
+use nalgebra::{RealField, SMatrix, Scalar};
 
 use super::spaces::{
-    Vector, StateSpace, MeasurementSpace, InnovationSpace,
-    StateVector, Measurement, Innovation,
-    StateCovariance, MeasurementCovariance,
+    Innovation, InnovationSpace, Measurement, MeasurementCovariance, MeasurementSpace,
+    StateCovariance, StateSpace, StateVector, Vector,
 };
 
 // ============================================================================
@@ -57,7 +56,10 @@ impl<T: Scalar, const ROWS: usize, const COLS: usize, To, From> Transform<T, ROW
 
 impl<T: Scalar + Copy, const ROWS: usize, const COLS: usize, To: Clone, From: Clone> Copy
     for Transform<T, ROWS, COLS, To, From>
-where SMatrix<T, ROWS, COLS>: Copy {}
+where
+    SMatrix<T, ROWS, COLS>: Copy,
+{
+}
 
 impl<T: RealField + Copy, const ROWS: usize, const COLS: usize, To, From>
     Transform<T, ROWS, COLS, To, From>
@@ -142,9 +144,7 @@ impl<T: RealField + Copy, const N: usize> TransitionMatrix<T, N> {
     /// Propagates a covariance matrix: F * P * F^T
     #[inline]
     pub fn propagate_covariance(&self, cov: &StateCovariance<T, N>) -> StateCovariance<T, N> {
-        StateCovariance::from_matrix(
-            self.inner * cov.as_matrix() * self.inner.transpose()
-        )
+        StateCovariance::from_matrix(self.inner * cov.as_matrix() * self.inner.transpose())
     }
 }
 
@@ -167,9 +167,7 @@ impl<T: RealField + Copy, const M: usize, const N: usize> ObservationMatrix<T, M
     /// Projects state covariance to measurement space: H * P * H^T
     #[inline]
     pub fn project_covariance(&self, cov: &StateCovariance<T, N>) -> MeasurementCovariance<T, M> {
-        MeasurementCovariance::from_matrix(
-            self.inner * cov.as_matrix() * self.inner.transpose()
-        )
+        MeasurementCovariance::from_matrix(self.inner * cov.as_matrix() * self.inner.transpose())
     }
 }
 
@@ -242,7 +240,8 @@ pub fn joseph_update<T: RealField + Copy, const N: usize, const M: usize>(
     let i_kh = i - k_h;
 
     let term1 = i_kh * state_cov.as_matrix() * i_kh.transpose();
-    let term2 = kalman_gain.as_matrix() * meas_noise.as_matrix() * kalman_gain.as_matrix().transpose();
+    let term2 =
+        kalman_gain.as_matrix() * meas_noise.as_matrix() * kalman_gain.as_matrix().transpose();
 
     StateCovariance::from_matrix(term1 + term2)
 }

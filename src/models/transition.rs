@@ -5,7 +5,7 @@
 use nalgebra::RealField;
 use num_traits::Float;
 
-use crate::types::spaces::{StateVector, StateCovariance};
+use crate::types::spaces::{StateCovariance, StateVector};
 use crate::types::transforms::TransitionMatrix;
 
 /// Trait for linear transition (motion) models.
@@ -54,10 +54,18 @@ impl<T: RealField + Float + Copy> ConstantVelocity2D<T> {
     /// # Panics
     /// Panics if `sigma_a < 0` or `p_survival` is not in [0, 1].
     pub fn new(sigma_a: T, p_survival: T) -> Self {
-        assert!(sigma_a >= T::zero(), "Process noise sigma_a must be non-negative");
-        assert!(p_survival >= T::zero() && p_survival <= T::one(),
-            "Survival probability must be in [0, 1]");
-        Self { sigma_a, p_survival }
+        assert!(
+            sigma_a >= T::zero(),
+            "Process noise sigma_a must be non-negative"
+        );
+        assert!(
+            p_survival >= T::zero() && p_survival <= T::one(),
+            "Survival probability must be in [0, 1]"
+        );
+        Self {
+            sigma_a,
+            p_survival,
+        }
     }
 }
 
@@ -127,10 +135,18 @@ impl<T: RealField + Float + Copy> ConstantVelocity3D<T> {
     /// # Panics
     /// Panics if `sigma_a < 0` or `p_survival` is not in [0, 1].
     pub fn new(sigma_a: T, p_survival: T) -> Self {
-        assert!(sigma_a >= T::zero(), "Process noise sigma_a must be non-negative");
-        assert!(p_survival >= T::zero() && p_survival <= T::one(),
-            "Survival probability must be in [0, 1]");
-        Self { sigma_a, p_survival }
+        assert!(
+            sigma_a >= T::zero(),
+            "Process noise sigma_a must be non-negative"
+        );
+        assert!(
+            p_survival >= T::zero() && p_survival <= T::one(),
+            "Survival probability must be in [0, 1]"
+        );
+        Self {
+            sigma_a,
+            p_survival,
+        }
     }
 }
 
@@ -221,11 +237,23 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
     /// # Panics
     /// Panics if noise parameters are negative or `p_survival` is not in [0, 1].
     pub fn new(sigma_a: T, sigma_omega: T, p_survival: T) -> Self {
-        assert!(sigma_a >= T::zero(), "Process noise sigma_a must be non-negative");
-        assert!(sigma_omega >= T::zero(), "Process noise sigma_omega must be non-negative");
-        assert!(p_survival >= T::zero() && p_survival <= T::one(),
-            "Survival probability must be in [0, 1]");
-        Self { sigma_a, sigma_omega, p_survival }
+        assert!(
+            sigma_a >= T::zero(),
+            "Process noise sigma_a must be non-negative"
+        );
+        assert!(
+            sigma_omega >= T::zero(),
+            "Process noise sigma_omega must be non-negative"
+        );
+        assert!(
+            p_survival >= T::zero() && p_survival <= T::one(),
+            "Survival probability must be in [0, 1]"
+        );
+        Self {
+            sigma_a,
+            sigma_omega,
+            p_survival,
+        }
     }
 
     /// Applies the nonlinear coordinated turn dynamics.
@@ -247,13 +275,7 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
 
         if num_traits::Float::abs(omega) < eps {
             // Nearly zero turn rate - use constant velocity
-            StateVector::from_array([
-                x + vx * dt,
-                y + vy * dt,
-                vx,
-                vy,
-                omega,
-            ])
+            StateVector::from_array([x + vx * dt, y + vy * dt, vx, vy, omega])
         } else {
             // Apply coordinated turn dynamics
             // The rotation matrix for velocity is:
@@ -324,10 +346,12 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
             // Partial derivatives w.r.t. omega (using quotient rule)
             // For x: d/dω [(vx*sin(ωt) + vy*(1-cos(ωt)))/ω]
             let dx_domega = (vx * (omega_dt * cos_omega_dt - sin_omega_dt)
-                + vy * (omega_dt * sin_omega_dt - one_minus_cos)) / omega_sq;
+                + vy * (omega_dt * sin_omega_dt - one_minus_cos))
+                / omega_sq;
             // For y: d/dω [(vx*(1-cos(ωt)) + vy*sin(ωt))/ω]
             let dy_domega = (vx * (omega_dt * sin_omega_dt - one_minus_cos)
-                + vy * (omega_dt * cos_omega_dt - sin_omega_dt)) / omega_sq;
+                + vy * (omega_dt * cos_omega_dt - sin_omega_dt))
+                / omega_sq;
 
             // Partial derivatives for velocity w.r.t. omega
             // vx_new = vx*cos(ωt) - vy*sin(ωt)
@@ -459,10 +483,28 @@ mod tests {
         // Velocity is now pointing north: (0, 10)
         let r = 10.0 / FRAC_PI_2; // turn radius ≈ 6.37
 
-        assert!((predicted.index(0) - r).abs() < 1e-6, "x: {} vs {}", predicted.index(0), r);
-        assert!((predicted.index(1) - r).abs() < 1e-6, "y: {} vs {}", predicted.index(1), r);
-        assert!((predicted.index(2) - 0.0).abs() < 1e-6, "vx: {} should be ~0", predicted.index(2));
-        assert!((predicted.index(3) - 10.0).abs() < 1e-6, "vy: {} should be ~10", predicted.index(3));
+        assert!(
+            (predicted.index(0) - r).abs() < 1e-6,
+            "x: {} vs {}",
+            predicted.index(0),
+            r
+        );
+        assert!(
+            (predicted.index(1) - r).abs() < 1e-6,
+            "y: {} vs {}",
+            predicted.index(1),
+            r
+        );
+        assert!(
+            (predicted.index(2) - 0.0).abs() < 1e-6,
+            "vx: {} should be ~0",
+            predicted.index(2)
+        );
+        assert!(
+            (predicted.index(3) - 10.0).abs() < 1e-6,
+            "vy: {} should be ~10",
+            predicted.index(3)
+        );
     }
 
     #[test]
@@ -487,7 +529,11 @@ mod tests {
         let numerical_dx_dvx = (f_plus.index(0) - f_minus.index(0)) / (2.0 * eps);
         let analytical_dx_dvx = jacobian.as_matrix()[(0, 2)];
 
-        assert!((numerical_dx_dvx - analytical_dx_dvx).abs() < 1e-4,
-                "dx/dvx: numerical {} vs analytical {}", numerical_dx_dvx, analytical_dx_dvx);
+        assert!(
+            (numerical_dx_dvx - analytical_dx_dvx).abs() < 1e-4,
+            "dx/dvx: numerical {} vs analytical {}",
+            numerical_dx_dvx,
+            analytical_dx_dvx
+        );
     }
 }

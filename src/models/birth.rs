@@ -8,8 +8,8 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::spaces::{StateVector, StateCovariance, Measurement};
 use crate::types::gaussian::GaussianState;
+use crate::types::spaces::{Measurement, StateCovariance, StateVector};
 
 /// Trait for birth models.
 ///
@@ -44,7 +44,9 @@ pub struct FixedBirthModel<T: RealField, const N: usize> {
 impl<T: RealField + Copy, const N: usize> FixedBirthModel<T, N> {
     /// Creates an empty birth model.
     pub fn new() -> Self {
-        Self { components: Vec::new() }
+        Self {
+            components: Vec::new(),
+        }
     }
 
     /// Creates a birth model from a vector of components.
@@ -66,13 +68,19 @@ impl<T: RealField + Copy, const N: usize> FixedBirthModel<T, N> {
     ///
     /// # Panics
     /// Panics if `weight < 0` or covariance is not positive definite.
-    pub fn add_birth_location(&mut self, weight: T, mean: StateVector<T, N>, covariance: StateCovariance<T, N>) {
+    pub fn add_birth_location(
+        &mut self,
+        weight: T,
+        mean: StateVector<T, N>,
+        covariance: StateCovariance<T, N>,
+    ) {
         assert!(weight >= T::zero(), "Birth weight must be non-negative");
         assert!(
             covariance.determinant_cholesky().is_some(),
             "Birth covariance must be positive definite"
         );
-        self.components.push(GaussianState::new(weight, mean, covariance));
+        self.components
+            .push(GaussianState::new(weight, mean, covariance));
     }
 }
 
@@ -90,7 +98,9 @@ impl<T: RealField + Copy, const N: usize> BirthModel<T, N> for FixedBirthModel<T
     }
 
     fn total_birth_mass(&self) -> T {
-        self.components.iter().fold(T::zero(), |acc, c| acc + c.weight)
+        self.components
+            .iter()
+            .fold(T::zero(), |acc, c| acc + c.weight)
     }
 }
 
@@ -128,8 +138,14 @@ impl<T: RealField + Float + Copy> AdaptiveBirthModel<T, 4, 2> {
     /// # Panics
     /// Panics if `birth_weight < 0` or `velocity_covariance <= 0`.
     pub fn new_cv2d(birth_weight: T, velocity_covariance: T) -> Self {
-        assert!(birth_weight >= T::zero(), "Birth weight must be non-negative");
-        assert!(velocity_covariance > T::zero(), "Velocity covariance must be positive");
+        assert!(
+            birth_weight >= T::zero(),
+            "Birth weight must be non-negative"
+        );
+        assert!(
+            velocity_covariance > T::zero(),
+            "Velocity covariance must be positive"
+        );
         Self {
             birth_weight,
             velocity_covariance,
@@ -144,16 +160,15 @@ impl<T: RealField + Float + Copy> AdaptiveBirthModel<T, 4, 2> {
     }
 
     /// Creates birth components from measurements.
-    pub fn birth_from_measurements(&self, measurements: &[Measurement<T, 2>]) -> Vec<GaussianState<T, 4>> {
+    pub fn birth_from_measurements(
+        &self,
+        measurements: &[Measurement<T, 2>],
+    ) -> Vec<GaussianState<T, 4>> {
         let mut components = self.base_components.clone();
 
         for meas in measurements {
-            let mean = StateVector::from_array([
-                *meas.index(0),
-                *meas.index(1),
-                T::zero(),
-                T::zero(),
-            ]);
+            let mean =
+                StateVector::from_array([*meas.index(0), *meas.index(1), T::zero(), T::zero()]);
 
             // Covariance: position from measurement, large velocity uncertainty
             let zero = T::zero();
@@ -181,7 +196,9 @@ impl<T: RealField + Float + Copy> BirthModel<T, 4> for AdaptiveBirthModel<T, 4, 
     }
 
     fn total_birth_mass(&self) -> T {
-        self.base_components.iter().fold(T::zero(), |acc, c| acc + c.weight)
+        self.base_components
+            .iter()
+            .fold(T::zero(), |acc, c| acc + c.weight)
     }
 }
 
@@ -223,7 +240,10 @@ impl<T: RealField + Float + Copy> UniformBirthModel2D<T> {
         position_std: T,
         velocity_std: T,
     ) -> Self {
-        assert!(total_intensity >= T::zero(), "Total intensity must be non-negative");
+        assert!(
+            total_intensity >= T::zero(),
+            "Total intensity must be non-negative"
+        );
         assert!(x_bounds.1 > x_bounds.0, "x_bounds must have max > min");
         assert!(y_bounds.1 > y_bounds.0, "y_bounds must have max > min");
         assert!(grid_size >= 2, "Grid size must be at least 2");
@@ -258,7 +278,10 @@ impl<T: RealField + Float + Copy> UniformBirthModel2D<T> {
             }
         }
 
-        Self { total_intensity, components }
+        Self {
+            total_intensity,
+            components,
+        }
     }
 }
 

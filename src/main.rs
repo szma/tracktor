@@ -2,9 +2,9 @@
 //!
 //! Demonstrates a simple multi-target tracking scenario using the GM-PHD filter.
 
-use tracktor::prelude::*;
 use tracktor::filters::phd::GmPhdFilter;
-use tracktor::utils::{prune_and_merge, PruningConfig, extract_targets, ExtractionConfig};
+use tracktor::prelude::*;
+use tracktor::utils::{extract_targets, prune_and_merge, ExtractionConfig, PruningConfig};
 
 fn main() {
     println!("Tracktor: Multi-Target Tracking Library");
@@ -12,25 +12,25 @@ fn main() {
 
     // Create models
     let transition = ConstantVelocity2D::new(
-        1.0,   // Process noise (acceleration std)
-        0.99,  // Survival probability
+        1.0,  // Process noise (acceleration std)
+        0.99, // Survival probability
     );
 
     let observation = PositionSensor2D::new(
-        5.0,   // Measurement noise std
-        0.9,   // Detection probability
+        5.0, // Measurement noise std
+        0.9, // Detection probability
     );
 
     let clutter = UniformClutter2D::new(
-        5.0,           // Clutter rate (expected false alarms per scan)
-        (0.0, 200.0),  // X bounds
-        (0.0, 200.0),  // Y bounds
+        5.0,          // Clutter rate (expected false alarms per scan)
+        (0.0, 200.0), // X bounds
+        (0.0, 200.0), // Y bounds
     );
 
     // Fixed birth model with entry points
     let mut birth = FixedBirthModel::<f64, 4>::new();
     birth.add_birth_location(
-        0.05,  // Birth weight
+        0.05, // Birth weight
         StateVector::from_array([10.0, 10.0, 0.0, 0.0]),
         StateCovariance::from_matrix(nalgebra::matrix![
             100.0, 0.0, 0.0, 0.0;
@@ -79,9 +79,11 @@ fn main() {
 
     let mut state = filter.initial_state_from(initial_components);
 
-    println!("Initial state: {} components, {:.2} expected targets\n",
-             state.mixture.len(),
-             state.expected_target_count());
+    println!(
+        "Initial state: {} components, {:.2} expected targets\n",
+        state.mixture.len(),
+        state.expected_target_count()
+    );
 
     // Simulate measurements for 5 time steps
     let measurements_per_step = vec![
@@ -103,7 +105,8 @@ fn main() {
 
     for (t, meas_data) in measurements_per_step.iter().enumerate() {
         // Convert measurements
-        let measurements: Vec<Measurement<f64, 2>> = meas_data.iter()
+        let measurements: Vec<Measurement<f64, 2>> = meas_data
+            .iter()
             .map(|m| Measurement::from_array(*m))
             .collect();
 
@@ -111,34 +114,42 @@ fn main() {
 
         // Predict
         let predicted = state.predict(&filter.transition, &filter.birth, dt);
-        println!("  After predict: {} components, {:.2} expected targets",
-                 predicted.mixture.len(),
-                 predicted.expected_target_count());
+        println!(
+            "  After predict: {} components, {:.2} expected targets",
+            predicted.mixture.len(),
+            predicted.expected_target_count()
+        );
 
         // Update
         let updated = predicted.update(&measurements, &filter.observation, &filter.clutter);
-        println!("  After update:  {} components, {:.2} expected targets",
-                 updated.mixture.len(),
-                 updated.expected_target_count());
+        println!(
+            "  After update:  {} components, {:.2} expected targets",
+            updated.mixture.len(),
+            updated.expected_target_count()
+        );
 
         // Prune and merge
         let pruned = prune_and_merge(&updated.mixture, &pruning_config);
         state = tracktor::filters::phd::PhdFilterState::from_mixture(pruned);
-        println!("  After prune:   {} components, {:.2} expected targets",
-                 state.mixture.len(),
-                 state.expected_target_count());
+        println!(
+            "  After prune:   {} components, {:.2} expected targets",
+            state.mixture.len(),
+            state.expected_target_count()
+        );
 
         // Extract targets
         let targets = extract_targets(&state.mixture, &extraction_config);
         println!("  Extracted targets:");
         for (i, target) in targets.iter().enumerate() {
-            println!("    Target {}: pos=({:.1}, {:.1}), vel=({:.1}, {:.1}), conf={:.2}",
-                     i,
-                     target.state.index(0),
-                     target.state.index(1),
-                     target.state.index(2),
-                     target.state.index(3),
-                     target.confidence);
+            println!(
+                "    Target {}: pos=({:.1}, {:.1}), vel=({:.1}, {:.1}), conf={:.2}",
+                i,
+                target.state.index(0),
+                target.state.index(1),
+                target.state.index(2),
+                target.state.index(3),
+                target.confidence
+            );
         }
         println!();
     }

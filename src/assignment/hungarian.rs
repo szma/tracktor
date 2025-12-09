@@ -33,7 +33,9 @@ impl Assignment {
 
     /// Returns an iterator over (row, col) pairs.
     pub fn pairs(&self) -> impl Iterator<Item = (usize, usize)> + '_ {
-        self.mapping.iter().enumerate()
+        self.mapping
+            .iter()
+            .enumerate()
             .filter_map(|(row, col)| col.map(|c| (row, c)))
     }
 }
@@ -142,8 +144,8 @@ pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, TracktorError> {
     for i in 0..n {
         // Start augmenting path from row i
         let mut min_to = vec![f64::INFINITY; n]; // Minimum reduced cost to reach each column
-        let mut way = vec![None::<usize>; n];    // Previous column in augmenting path
-        let mut used = vec![false; n];           // Columns visited in this iteration
+        let mut way = vec![None::<usize>; n]; // Previous column in augmenting path
+        let mut used = vec![false; n]; // Columns visited in this iteration
 
         let mut cur_row = i;
         let mut cur_col: Option<usize> = None;
@@ -243,7 +245,10 @@ pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, TracktorError> {
 ///
 /// Assignments with cost above the threshold are not made.
 #[cfg(feature = "alloc")]
-pub fn hungarian_gated(cost: &CostMatrix, gate_threshold: f64) -> Result<Assignment, TracktorError> {
+pub fn hungarian_gated(
+    cost: &CostMatrix,
+    gate_threshold: f64,
+) -> Result<Assignment, TracktorError> {
     // Create a gated cost matrix
     let mut gated = CostMatrix::zeros(cost.rows(), cost.cols());
     let large = 1e20_f64;
@@ -271,9 +276,7 @@ pub fn hungarian_gated(cost: &CostMatrix, gate_threshold: f64) -> Result<Assignm
     }
 
     // Recalculate cost
-    result.cost = result.pairs()
-        .map(|(i, j)| cost.get(i, j))
-        .sum();
+    result.cost = result.pairs().map(|(i, j)| cost.get(i, j)).sum();
 
     Ok(result)
 }
@@ -282,7 +285,11 @@ pub fn hungarian_gated(cost: &CostMatrix, gate_threshold: f64) -> Result<Assignm
 ///
 /// Better for sparse problems or when approximate solutions are acceptable.
 #[cfg(feature = "alloc")]
-pub fn auction(cost: &CostMatrix, epsilon: f64, max_iter: usize) -> Result<Assignment, TracktorError> {
+pub fn auction(
+    cost: &CostMatrix,
+    epsilon: f64,
+    max_iter: usize,
+) -> Result<Assignment, TracktorError> {
     let n_rows = cost.rows();
     let n_cols = cost.cols();
 
@@ -338,7 +345,9 @@ pub fn auction(cost: &CostMatrix, epsilon: f64, max_iter: usize) -> Result<Assig
     }
 
     // Calculate total cost
-    let total_cost: f64 = row_assignment.iter().enumerate()
+    let total_cost: f64 = row_assignment
+        .iter()
+        .enumerate()
         .filter_map(|(i, j)| j.map(|j| cost.get(i, j)))
         .sum();
 
@@ -353,55 +362,45 @@ mod tests {
     #[test]
     fn test_hungarian_simple() {
         // Simple 3x3 cost matrix
-        let cost = CostMatrix::from_vec(
-            vec![
-                1.0, 2.0, 3.0,
-                4.0, 5.0, 6.0,
-                7.0, 8.0, 9.0,
-            ],
-            3, 3
-        ).unwrap();
+        let cost =
+            CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 3, 3).unwrap();
 
         let result = hungarian(&cost).unwrap();
 
         // Optimal assignment: 0->2, 1->1, 2->0 (cost = 3+5+7 = 15)
         assert_eq!(result.num_assigned(), 3);
-        assert!((result.cost - 15.0).abs() < 0.01, "Expected cost 15.0, got {}", result.cost);
+        assert!(
+            (result.cost - 15.0).abs() < 0.01,
+            "Expected cost 15.0, got {}",
+            result.cost
+        );
     }
 
     #[cfg(feature = "alloc")]
     #[test]
     fn test_hungarian_asymmetric() {
         // Cost matrix where diagonal is not optimal
-        let cost = CostMatrix::from_vec(
-            vec![
-                10.0, 5.0, 13.0,
-                3.0, 15.0, 8.0,
-                7.0, 4.0, 12.0,
-            ],
-            3, 3
-        ).unwrap();
+        let cost =
+            CostMatrix::from_vec(vec![10.0, 5.0, 13.0, 3.0, 15.0, 8.0, 7.0, 4.0, 12.0], 3, 3)
+                .unwrap();
 
         let result = hungarian(&cost).unwrap();
 
         // Optimal: 0->1 (5), 1->0 (3), 2->2 (12) = 20
         // or: 0->2 (13), 1->0 (3), 2->1 (4) = 20
         assert_eq!(result.num_assigned(), 3);
-        assert!((result.cost - 20.0).abs() < 0.01, "Expected cost 20.0, got {}", result.cost);
+        assert!(
+            (result.cost - 20.0).abs() < 0.01,
+            "Expected cost 20.0, got {}",
+            result.cost
+        );
     }
 
     #[cfg(feature = "alloc")]
     #[test]
     fn test_hungarian_rectangular() {
         // More rows than columns
-        let cost = CostMatrix::from_vec(
-            vec![
-                1.0, 2.0,
-                3.0, 4.0,
-                5.0, 6.0,
-            ],
-            3, 2
-        ).unwrap();
+        let cost = CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3, 2).unwrap();
 
         let result = hungarian(&cost).unwrap();
 
@@ -412,13 +411,7 @@ mod tests {
     #[cfg(feature = "alloc")]
     #[test]
     fn test_hungarian_gated() {
-        let cost = CostMatrix::from_vec(
-            vec![
-                1.0, 100.0,
-                100.0, 2.0,
-            ],
-            2, 2
-        ).unwrap();
+        let cost = CostMatrix::from_vec(vec![1.0, 100.0, 100.0, 2.0], 2, 2).unwrap();
 
         let result = hungarian_gated(&cost, 10.0).unwrap();
 
@@ -430,20 +423,17 @@ mod tests {
     #[cfg(feature = "alloc")]
     #[test]
     fn test_auction() {
-        let cost = CostMatrix::from_vec(
-            vec![
-                1.0, 2.0, 3.0,
-                4.0, 5.0, 6.0,
-                7.0, 8.0, 9.0,
-            ],
-            3, 3
-        ).unwrap();
+        let cost =
+            CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 3, 3).unwrap();
 
         let result = auction(&cost, 0.1, 100).unwrap();
 
         assert_eq!(result.num_assigned(), 3);
         // Auction is epsilon-optimal, should be within 3*epsilon of optimal (15.0)
-        assert!(result.cost >= 14.5 && result.cost <= 15.5,
-                "Auction cost {} not within bounds", result.cost);
+        assert!(
+            result.cost >= 14.5 && result.cost <= 15.5,
+            "Auction cost {} not within bounds",
+            result.cost
+        );
     }
 }

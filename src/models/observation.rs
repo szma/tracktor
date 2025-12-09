@@ -5,7 +5,7 @@
 use nalgebra::RealField;
 use num_traits::Float;
 
-use crate::types::spaces::{StateVector, MeasurementCovariance};
+use crate::types::spaces::{MeasurementCovariance, StateVector};
 use crate::types::transforms::ObservationMatrix;
 
 /// Trait for linear observation models.
@@ -54,10 +54,18 @@ impl<T: RealField + Float + Copy> PositionSensor2D<T> {
     /// # Panics
     /// Panics if `sigma_pos <= 0` or `p_detection` is not in [0, 1].
     pub fn new(sigma_pos: T, p_detection: T) -> Self {
-        assert!(sigma_pos > T::zero(), "Measurement noise sigma_pos must be positive");
-        assert!(p_detection >= T::zero() && p_detection <= T::one(),
-            "Detection probability must be in [0, 1]");
-        Self { sigma_pos, p_detection }
+        assert!(
+            sigma_pos > T::zero(),
+            "Measurement noise sigma_pos must be positive"
+        );
+        assert!(
+            p_detection >= T::zero() && p_detection <= T::one(),
+            "Detection probability must be in [0, 1]"
+        );
+        Self {
+            sigma_pos,
+            p_detection,
+        }
     }
 
     /// Creates a sensor with different noise in x and y.
@@ -65,11 +73,23 @@ impl<T: RealField + Float + Copy> PositionSensor2D<T> {
     /// # Panics
     /// Panics if `sigma_x <= 0`, `sigma_y <= 0`, or `p_detection` is not in [0, 1].
     pub fn with_noise(sigma_x: T, sigma_y: T, p_detection: T) -> PositionSensor2DAsym<T> {
-        assert!(sigma_x > T::zero(), "Measurement noise sigma_x must be positive");
-        assert!(sigma_y > T::zero(), "Measurement noise sigma_y must be positive");
-        assert!(p_detection >= T::zero() && p_detection <= T::one(),
-            "Detection probability must be in [0, 1]");
-        PositionSensor2DAsym { sigma_x, sigma_y, p_detection }
+        assert!(
+            sigma_x > T::zero(),
+            "Measurement noise sigma_x must be positive"
+        );
+        assert!(
+            sigma_y > T::zero(),
+            "Measurement noise sigma_y must be positive"
+        );
+        assert!(
+            p_detection >= T::zero() && p_detection <= T::one(),
+            "Detection probability must be in [0, 1]"
+        );
+        PositionSensor2DAsym {
+            sigma_x,
+            sigma_y,
+            p_detection,
+        }
     }
 }
 
@@ -158,10 +178,18 @@ impl<T: RealField + Float + Copy> PositionSensor3D<T> {
     /// # Panics
     /// Panics if `sigma_pos <= 0` or `p_detection` is not in [0, 1].
     pub fn new(sigma_pos: T, p_detection: T) -> Self {
-        assert!(sigma_pos > T::zero(), "Measurement noise sigma_pos must be positive");
-        assert!(p_detection >= T::zero() && p_detection <= T::one(),
-            "Detection probability must be in [0, 1]");
-        Self { sigma_pos, p_detection }
+        assert!(
+            sigma_pos > T::zero(),
+            "Measurement noise sigma_pos must be positive"
+        );
+        assert!(
+            p_detection >= T::zero() && p_detection <= T::one(),
+            "Detection probability must be in [0, 1]"
+        );
+        Self {
+            sigma_pos,
+            p_detection,
+        }
     }
 }
 
@@ -227,10 +255,18 @@ impl<T: RealField + Float + Copy> RangeBearingSensor<T> {
     /// # Panics
     /// Panics if noise parameters are non-positive or `p_detection` is not in [0, 1].
     pub fn new(sigma_range: T, sigma_bearing: T, p_detection: T) -> Self {
-        assert!(sigma_range > T::zero(), "Range noise sigma_range must be positive");
-        assert!(sigma_bearing > T::zero(), "Bearing noise sigma_bearing must be positive");
-        assert!(p_detection >= T::zero() && p_detection <= T::one(),
-            "Detection probability must be in [0, 1]");
+        assert!(
+            sigma_range > T::zero(),
+            "Range noise sigma_range must be positive"
+        );
+        assert!(
+            sigma_bearing > T::zero(),
+            "Bearing noise sigma_bearing must be positive"
+        );
+        assert!(
+            p_detection >= T::zero() && p_detection <= T::one(),
+            "Detection probability must be in [0, 1]"
+        );
         Self {
             sigma_range,
             sigma_bearing,
@@ -251,11 +287,25 @@ impl<T: RealField + Float + Copy> RangeBearingSensor<T> {
     ///
     /// # Panics
     /// Panics if noise parameters are non-positive or `p_detection` is not in [0, 1].
-    pub fn at_position(sigma_range: T, sigma_bearing: T, p_detection: T, sensor_x: T, sensor_y: T) -> Self {
-        assert!(sigma_range > T::zero(), "Range noise sigma_range must be positive");
-        assert!(sigma_bearing > T::zero(), "Bearing noise sigma_bearing must be positive");
-        assert!(p_detection >= T::zero() && p_detection <= T::one(),
-            "Detection probability must be in [0, 1]");
+    pub fn at_position(
+        sigma_range: T,
+        sigma_bearing: T,
+        p_detection: T,
+        sensor_x: T,
+        sensor_y: T,
+    ) -> Self {
+        assert!(
+            sigma_range > T::zero(),
+            "Range noise sigma_range must be positive"
+        );
+        assert!(
+            sigma_bearing > T::zero(),
+            "Bearing noise sigma_bearing must be positive"
+        );
+        assert!(
+            p_detection >= T::zero() && p_detection <= T::one(),
+            "Detection probability must be in [0, 1]"
+        );
         Self {
             sigma_range,
             sigma_bearing,
@@ -323,9 +373,13 @@ impl<T: RealField + Float + Copy> RangeBearingSensor<T> {
     }
 
     /// Legacy alias for `jacobian_at`. Prefer `jacobian_at` for clarity.
-    #[deprecated(since = "0.2.0", note = "Use jacobian_at() instead which returns Option")]
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use jacobian_at() instead which returns Option"
+    )]
     pub fn jacobian(&self, state: &StateVector<T, 4>) -> ObservationMatrix<T, 2, 4> {
-        self.jacobian_at(state).unwrap_or_else(ObservationMatrix::zeros)
+        self.jacobian_at(state)
+            .unwrap_or_else(ObservationMatrix::zeros)
     }
 
     /// Legacy alias for `observe_nonlinear`. Prefer `observe_nonlinear` for clarity.

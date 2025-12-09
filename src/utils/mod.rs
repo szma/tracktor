@@ -2,8 +2,8 @@
 //!
 //! Component pruning, merging, and state extraction utilities.
 
-mod pruning;
 mod extraction;
+mod pruning;
 
-pub use pruning::*;
 pub use extraction::*;
+pub use pruning::*;

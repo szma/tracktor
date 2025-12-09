@@ -9,8 +9,8 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::spaces::{StateVector, StateCovariance};
-use crate::types::gaussian::{GaussianState, GaussianMixture};
+use crate::types::gaussian::{GaussianMixture, GaussianState};
+use crate::types::spaces::{StateCovariance, StateVector};
 
 /// A target state estimate with associated uncertainty.
 #[derive(Debug, Clone)]
@@ -26,7 +26,11 @@ pub struct TargetEstimate<T: RealField, const N: usize> {
 impl<T: RealField + Copy, const N: usize> TargetEstimate<T, N> {
     /// Creates a new target estimate.
     pub fn new(state: StateVector<T, N>, covariance: StateCovariance<T, N>, confidence: T) -> Self {
-        Self { state, covariance, confidence }
+        Self {
+            state,
+            covariance,
+            confidence,
+        }
     }
 
     /// Creates an estimate from a Gaussian component.
@@ -121,19 +125,19 @@ pub fn extract_targets<T: RealField + Float + Copy, const N: usize>(
     config: &ExtractionConfig<T>,
 ) -> Vec<TargetEstimate<T, N>> {
     match config.method {
-        ExtractionMethod::WeightThreshold => {
-            extract_by_threshold(mixture, config.weight_threshold)
-        }
-        ExtractionMethod::TopN => {
-            extract_top_n(mixture, config.top_n)
-        }
+        ExtractionMethod::WeightThreshold => extract_by_threshold(mixture, config.weight_threshold),
+        ExtractionMethod::TopN => extract_top_n(mixture, config.top_n),
         ExtractionMethod::ExpectedCount => {
-            let n = num_traits::Float::round(mixture.total_weight()).to_usize().unwrap_or(0);
+            let n = num_traits::Float::round(mixture.total_weight())
+                .to_usize()
+                .unwrap_or(0);
             extract_top_n(mixture, n)
         }
-        ExtractionMethod::LocalMaxima => {
-            extract_local_maxima_with_dist(mixture, config.weight_threshold, config.local_maxima_dist_sq)
-        }
+        ExtractionMethod::LocalMaxima => extract_local_maxima_with_dist(
+            mixture,
+            config.weight_threshold,
+            config.local_maxima_dist_sq,
+        ),
     }
 }
 
@@ -143,7 +147,8 @@ pub fn extract_by_threshold<T: RealField + Float + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
     threshold: T,
 ) -> Vec<TargetEstimate<T, N>> {
-    mixture.iter()
+    mixture
+        .iter()
         .filter(|c| c.weight >= threshold)
         .map(TargetEstimate::from_gaussian)
         .collect()
@@ -161,10 +166,13 @@ pub fn extract_top_n<T: RealField + Float + Copy, const N: usize>(
 
     let mut indexed: Vec<_> = mixture.iter().enumerate().collect();
     indexed.sort_by(|(_, a), (_, b)| {
-        b.weight.partial_cmp(&a.weight).unwrap_or(core::cmp::Ordering::Equal)
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(core::cmp::Ordering::Equal)
     });
 
-    indexed.into_iter()
+    indexed
+        .into_iter()
         .take(n)
         .map(|(_, c)| TargetEstimate::from_gaussian(c))
         .collect()
@@ -195,13 +203,16 @@ pub fn extract_local_maxima_with_dist<T: RealField + Float + Copy, const N: usiz
     use crate::utils::pruning::mahalanobis_distance_squared;
 
     // Sort by weight descending
-    let mut sorted: Vec<_> = mixture.iter()
+    let mut sorted: Vec<_> = mixture
+        .iter()
         .filter(|c| c.weight >= min_weight)
         .cloned()
         .collect();
 
     sorted.sort_by(|a, b| {
-        b.weight.partial_cmp(&a.weight).unwrap_or(core::cmp::Ordering::Equal)
+        b.weight
+            .partial_cmp(&a.weight)
+            .unwrap_or(core::cmp::Ordering::Equal)
     });
 
     let mut maxima = Vec::new();
@@ -226,7 +237,9 @@ pub fn extract_local_maxima_with_dist<T: RealField + Float + Copy, const N: usiz
 pub fn estimate_cardinality<T: RealField + Float + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
 ) -> usize {
-    num_traits::Float::round(mixture.total_weight()).to_usize().unwrap_or(0)
+    num_traits::Float::round(mixture.total_weight())
+        .to_usize()
+        .unwrap_or(0)
 }
 
 /// Computes the mean state from a mixture (treating all components equally).
@@ -248,7 +261,9 @@ pub fn mixture_mean<T: RealField + Float + Copy, const N: usize>(
         sum += component.mean.as_svector().scale(component.weight);
     }
 
-    Some(StateVector::from_svector(sum.scale(T::one() / total_weight)))
+    Some(StateVector::from_svector(
+        sum.scale(T::one() / total_weight),
+    ))
 }
 
 /// Computes the spread (covariance) of the mixture.
@@ -273,7 +288,9 @@ pub fn mixture_covariance<T: RealField + Float + Copy, const N: usize>(
         cov_sum += (component.covariance.as_matrix() + spread).scale(component.weight);
     }
 
-    Some(StateCovariance::from_matrix(cov_sum.scale(T::one() / total_weight)))
+    Some(StateCovariance::from_matrix(
+        cov_sum.scale(T::one() / total_weight),
+    ))
 }
 
 #[cfg(test)]

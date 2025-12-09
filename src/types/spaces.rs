@@ -4,8 +4,8 @@
 //! across different mathematical spaces (state, measurement, innovation).
 
 use ::core::marker::PhantomData;
-use ::core::ops::{Add, Sub, Mul, Neg};
-use nalgebra::{SVector, RealField, Scalar};
+use ::core::ops::{Add, Mul, Neg, Sub};
+use nalgebra::{RealField, SVector, Scalar};
 
 // ============================================================================
 // Vector Space Markers
@@ -257,8 +257,10 @@ impl<T: Scalar, const N: usize, Space> Covariance<T, N, Space> {
     }
 }
 
-impl<T: Scalar + Copy, const N: usize, Space: Clone> Copy for Covariance<T, N, Space>
-where nalgebra::SMatrix<T, N, N>: Copy {}
+impl<T: Scalar + Copy, const N: usize, Space: Clone> Copy for Covariance<T, N, Space> where
+    nalgebra::SMatrix<T, N, N>: Copy
+{
+}
 
 impl<T: RealField + Copy, const N: usize, Space> Covariance<T, N, Space> {
     /// Creates a zero covariance matrix.
@@ -417,9 +419,8 @@ mod tests {
     #[test]
     fn test_singular_covariance_determinant() {
         // A singular matrix should return None
-        let singular: StateCovariance<f64, 2> = StateCovariance::from_matrix(
-            nalgebra::matrix![1.0, 1.0; 1.0, 1.0]
-        );
+        let singular: StateCovariance<f64, 2> =
+            StateCovariance::from_matrix(nalgebra::matrix![1.0, 1.0; 1.0, 1.0]);
         assert!(singular.determinant().is_none());
     }
 }

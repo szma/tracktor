@@ -12,12 +12,10 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::spaces::{StateVector, Measurement, ComputeInnovation};
-use crate::types::transforms::{
-    compute_kalman_gain, compute_innovation_covariance, joseph_update,
-};
-use crate::types::gaussian::{GaussianState, GaussianMixture, innovation_likelihood};
-use crate::models::{TransitionModel, ObservationModel, ClutterModel, BirthModel};
+use crate::models::{BirthModel, ClutterModel, ObservationModel, TransitionModel};
+use crate::types::gaussian::{innovation_likelihood, GaussianMixture, GaussianState};
+use crate::types::spaces::{ComputeInnovation, Measurement, StateVector};
+use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gain, joseph_update};
 
 // ============================================================================
 // Filter Phase Markers
@@ -114,7 +112,7 @@ impl<T: RealField + Copy, const N: usize> PhdFilterState<T, N, Updated> {
         let process_noise = transition_model.process_noise(dt);
 
         let mut predicted = GaussianMixture::with_capacity(
-            self.mixture.len() + birth_model.birth_components().len()
+            self.mixture.len() + birth_model.birth_components().len(),
         );
 
         // Predict surviving components
@@ -124,7 +122,8 @@ impl<T: RealField + Copy, const N: usize> PhdFilterState<T, N, Updated> {
             let predicted_component = GaussianState {
                 weight: component.weight * p_s,
                 mean: transition_matrix.apply_state(&component.mean),
-                covariance: transition_matrix.propagate_covariance(&component.covariance)
+                covariance: transition_matrix
+                    .propagate_covariance(&component.covariance)
                     .add(&process_noise),
             };
 
@@ -176,22 +175,26 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
         let mut stats = UpdateStats::default();
 
         // Pre-compute per-component data
-        let component_data: Vec<_> = self.mixture.iter().map(|c| {
-            let p_d = observation_model.detection_probability(&c.mean);
-            let predicted_meas = obs_matrix.observe(&c.mean);
-            let innovation_cov = compute_innovation_covariance(&c.covariance, &obs_matrix, &meas_noise);
-            let kalman_gain = compute_kalman_gain(&c.covariance, &obs_matrix, &innovation_cov);
+        let component_data: Vec<_> = self
+            .mixture
+            .iter()
+            .map(|c| {
+                let p_d = observation_model.detection_probability(&c.mean);
+                let predicted_meas = obs_matrix.observe(&c.mean);
+                let innovation_cov =
+                    compute_innovation_covariance(&c.covariance, &obs_matrix, &meas_noise);
+                let kalman_gain = compute_kalman_gain(&c.covariance, &obs_matrix, &innovation_cov);
 
-            if kalman_gain.is_none() {
-                stats.singular_covariance_count += 1;
-            }
+                if kalman_gain.is_none() {
+                    stats.singular_covariance_count += 1;
+                }
 
-            (p_d, predicted_meas, innovation_cov, kalman_gain)
-        }).collect();
+                (p_d, predicted_meas, innovation_cov, kalman_gain)
+            })
+            .collect();
 
-        let mut updated = GaussianMixture::with_capacity(
-            self.mixture.len() * (measurements.len() + 1)
-        );
+        let mut updated =
+            GaussianMixture::with_capacity(self.mixture.len() * (measurements.len() + 1));
 
         // Missed detection components
         for (i, component) in self.mixture.iter().enumerate() {
@@ -212,22 +215,27 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
             // Compute denominator for weight normalization
             let mut weight_sum = clutter_model.clutter_intensity(measurement);
 
-            let detection_weights: Vec<T> = self.mixture.iter().enumerate().map(|(i, c)| {
-                let (p_d, ref predicted_meas, ref innovation_cov, _) = component_data[i];
+            let detection_weights: Vec<T> = self
+                .mixture
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    let (p_d, ref predicted_meas, ref innovation_cov, _) = component_data[i];
 
-                let innovation = measurement.innovation(*predicted_meas);
-                let likelihood = innovation_likelihood(&innovation, innovation_cov.as_matrix());
+                    let innovation = measurement.innovation(*predicted_meas);
+                    let likelihood = innovation_likelihood(&innovation, innovation_cov.as_matrix());
 
-                // Track zero likelihoods (can indicate numerical issues)
-                if likelihood <= T::zero() {
-                    stats.zero_likelihood_count += 1;
-                }
+                    // Track zero likelihoods (can indicate numerical issues)
+                    if likelihood <= T::zero() {
+                        stats.zero_likelihood_count += 1;
+                    }
 
-                let detection_weight = p_d * c.weight * likelihood;
-                weight_sum = weight_sum + detection_weight;
+                    let detection_weight = p_d * c.weight * likelihood;
+                    weight_sum = weight_sum + detection_weight;
 
-                detection_weight
-            }).collect();
+                    detection_weight
+                })
+                .collect();
 
             // Add updated components
             for (i, component) in self.mixture.iter().enumerate() {
@@ -240,14 +248,10 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
                         let innovation = measurement.innovation(*predicted_meas);
                         let correction = gain.correct(&innovation);
                         let updated_mean = StateVector::from_svector(
-                            component.mean.as_svector() + correction.as_svector()
+                            component.mean.as_svector() + correction.as_svector(),
                         );
-                        let updated_cov = joseph_update(
-                            &component.covariance,
-                            gain,
-                            &obs_matrix,
-                            &meas_noise,
-                        );
+                        let updated_cov =
+                            joseph_update(&component.covariance, gain, &obs_matrix, &meas_noise);
 
                         updated.push(GaussianState {
                             weight: normalized_weight,
@@ -261,11 +265,14 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
             }
         }
 
-        (PhdFilterState {
-            mixture: updated,
-            time_step: self.time_step,
-            _phase: PhantomData,
-        }, stats)
+        (
+            PhdFilterState {
+                mixture: updated,
+                time_step: self.time_step,
+                _phase: PhantomData,
+            },
+            stats,
+        )
     }
 
     /// Updates the PHD with a set of measurements.
@@ -282,7 +289,8 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
         Obs: ObservationModel<T, N, M>,
         Clutter: ClutterModel<T, M>,
     {
-        self.update_with_stats(measurements, observation_model, clutter_model).0
+        self.update_with_stats(measurements, observation_model, clutter_model)
+            .0
     }
 
     /// Returns the expected number of targets (before update).
@@ -387,12 +395,17 @@ where
 /// strategies (local maxima, expected count, etc.), use `crate::utils::extract_targets`
 /// with an `ExtractionConfig`.
 #[cfg(feature = "alloc")]
-#[deprecated(since = "0.2.0", note = "Use crate::utils::extract_targets with ExtractionConfig instead")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use crate::utils::extract_targets with ExtractionConfig instead"
+)]
 pub fn extract_states<T: RealField + Float + Copy, const N: usize, Phase>(
     state: &PhdFilterState<T, N, Phase>,
     threshold: T,
 ) -> Vec<(StateVector<T, N>, T)> {
-    state.mixture.iter()
+    state
+        .mixture
+        .iter()
         .filter(|c| c.weight >= threshold)
         .map(|c| (c.mean, c.weight))
         .collect()
@@ -405,14 +418,15 @@ pub fn extract_states<T: RealField + Float + Copy, const N: usize, Phase>(
 /// For more sophisticated extraction strategies, use `crate::utils::extract_targets`
 /// with `ExtractionConfig::top_n()`.
 #[cfg(feature = "alloc")]
-#[deprecated(since = "0.2.0", note = "Use crate::utils::extract_targets with ExtractionConfig::top_n() instead")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use crate::utils::extract_targets with ExtractionConfig::top_n() instead"
+)]
 pub fn extract_states_map<T: RealField + Float + Copy, const N: usize, Phase>(
     state: &PhdFilterState<T, N, Phase>,
     n_targets: usize,
 ) -> Vec<(StateVector<T, N>, T)> {
-    let mut components: Vec<_> = state.mixture.iter()
-        .map(|c| (c.mean, c.weight))
-        .collect();
+    let mut components: Vec<_> = state.mixture.iter().map(|c| (c.mean, c.weight)).collect();
 
     // Sort by weight descending
     components.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
@@ -424,7 +438,10 @@ pub fn extract_states_map<T: RealField + Float + Copy, const N: usize, Phase>(
 ///
 /// For a more complete API, use `crate::utils::estimate_cardinality`.
 #[cfg(feature = "alloc")]
-#[deprecated(since = "0.2.0", note = "Use crate::utils::estimate_cardinality instead")]
+#[deprecated(
+    since = "0.2.0",
+    note = "Use crate::utils::estimate_cardinality instead"
+)]
 pub fn estimate_target_count<T: RealField + Float + Copy, const N: usize, Phase>(
     state: &PhdFilterState<T, N, Phase>,
 ) -> usize {
@@ -435,8 +452,8 @@ pub fn estimate_target_count<T: RealField + Float + Copy, const N: usize, Phase>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::{ConstantVelocity2D, FixedBirthModel, PositionSensor2D, UniformClutter2D};
     use crate::types::spaces::StateCovariance;
-    use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D, FixedBirthModel};
 
     #[cfg(feature = "alloc")]
     #[test]
@@ -469,13 +486,11 @@ mod tests {
         let filter = GmPhdFilter::new(transition, observation, clutter, birth);
 
         // Start with one component
-        let initial = filter.initial_state_from(vec![
-            GaussianState::new(
-                1.0,
-                StateVector::from_array([10.0, 20.0, 1.0, 2.0]),
-                StateCovariance::identity(),
-            )
-        ]);
+        let initial = filter.initial_state_from(vec![GaussianState::new(
+            1.0,
+            StateVector::from_array([10.0, 20.0, 1.0, 2.0]),
+            StateCovariance::identity(),
+        )]);
 
         let predicted = initial.predict(&filter.transition, &filter.birth, 1.0);
 
@@ -499,18 +514,16 @@ mod tests {
         let filter = GmPhdFilter::new(transition, observation, clutter, birth);
 
         // Start with one component
-        let initial = filter.initial_state_from(vec![
-            GaussianState::new(
-                1.0,
-                StateVector::from_array([10.0, 20.0, 0.0, 0.0]),
-                StateCovariance::from_matrix(nalgebra::matrix![
-                    1.0, 0.0, 0.0, 0.0;
-                    0.0, 1.0, 0.0, 0.0;
-                    0.0, 0.0, 1.0, 0.0;
-                    0.0, 0.0, 0.0, 1.0
-                ]),
-            )
-        ]);
+        let initial = filter.initial_state_from(vec![GaussianState::new(
+            1.0,
+            StateVector::from_array([10.0, 20.0, 0.0, 0.0]),
+            StateCovariance::from_matrix(nalgebra::matrix![
+                1.0, 0.0, 0.0, 0.0;
+                0.0, 1.0, 0.0, 0.0;
+                0.0, 0.0, 1.0, 0.0;
+                0.0, 0.0, 0.0, 1.0
+            ]),
+        )]);
 
         let predicted = initial.predict(&filter.transition, &filter.birth, 1.0);
 

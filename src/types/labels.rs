@@ -3,8 +3,8 @@
 //! Labels uniquely identify targets across time, enabling track continuity
 //! and trajectory estimation.
 
-use nalgebra::RealField;
 use super::gaussian::GaussianState;
+use nalgebra::RealField;
 
 // ============================================================================
 // Track Label
@@ -130,7 +130,11 @@ impl<T: RealField + Copy, const N: usize> BernoulliTrack<T, N> {
     /// Creates a new Bernoulli track.
     #[inline]
     pub fn new(label: Label, existence: T, state: GaussianState<T, N>) -> Self {
-        Self { label, existence, state }
+        Self {
+            label,
+            existence,
+            state,
+        }
     }
 
     /// Returns true if this track is likely to exist (existence > 0.5).
@@ -212,7 +216,7 @@ impl Hypothesis {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::spaces::{StateVector, StateCovariance};
+    use crate::types::spaces::{StateCovariance, StateVector};
 
     #[test]
     fn test_label_generation() {
