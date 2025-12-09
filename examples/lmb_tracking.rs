@@ -152,6 +152,4 @@ fn main() {
         }
         println!();
     }
-
-    println!("LMB tracking complete!");
 }

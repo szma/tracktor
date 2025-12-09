@@ -116,11 +116,4 @@ fn main() {
         }
         println!();
     }
-
-    println!("LMBM tracking complete!");
-    println!("\nKey Features:");
-    println!("  - Maintains multiple association hypotheses");
-    println!("  - Uses Murty's algorithm for k-best assignments");
-    println!("  - Log-space weights for numerical stability");
-    println!("  - Marginal estimates average over all hypotheses");
 }
