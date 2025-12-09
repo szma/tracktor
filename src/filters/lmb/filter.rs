@@ -15,7 +15,7 @@ use super::types::{LmbTrack, LmbTrackSet, PosteriorGrid};
 #[allow(unused_imports)]
 use super::updaters::TrackUpdater;
 use crate::filters::phd::{Predicted, UpdateStats, Updated};
-use crate::models::{ClutterModel, ObservationModel, TransitionModel};
+use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
 use crate::types::spaces::{ComputeInnovation, Measurement, StateCovariance, StateVector};
@@ -391,6 +391,238 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
     /// Returns the expected number of targets (before update).
     pub fn expected_target_count(&self) -> T {
         self.tracks.expected_cardinality()
+    }
+
+    /// Updates the LMB density with measurements using EKF-style linearization.
+    ///
+    /// This method is for nonlinear observation models where the observation
+    /// function h(x) and its Jacobian depend on the state. The linearization
+    /// is performed at each track's predicted state.
+    ///
+    /// # Arguments
+    /// - `measurements`: Measurements in the sensor's native coordinate system
+    /// - `observation_model`: Nonlinear observation model with `observe()` and `jacobian_at()`
+    /// - `clutter_model`: Clutter model in the same coordinate system as measurements
+    ///
+    /// # Example
+    /// ```ignore
+    /// let sensor = RangeBearingSensor::new(sigma_r, sigma_b, p_d);
+    /// let clutter = UniformClutterRangeBearing::new(rate, range_bounds, bearing_bounds);
+    ///
+    /// let measurements = vec![Measurement::from_array([range, bearing])];
+    /// let (updated, stats) = predicted.update_ekf(&measurements, &sensor, &clutter);
+    /// ```
+    pub fn update_ekf<const M: usize, Obs, Clutter>(
+        self,
+        measurements: &[Measurement<T, M>],
+        observation_model: &Obs,
+        clutter_model: &Clutter,
+    ) -> (LmbFilterState<T, N, Updated>, UpdateStats)
+    where
+        Obs: NonlinearObservationModel<T, N, M>,
+        Clutter: ClutterModel<T, M>,
+    {
+        self.update_ekf_with_lbp(
+            measurements,
+            observation_model,
+            clutter_model,
+            50,
+            T::from_f64(1e-6).unwrap(),
+        )
+    }
+
+    /// Updates with EKF linearization and LBP association using custom parameters.
+    pub fn update_ekf_with_lbp<const M: usize, Obs, Clutter>(
+        mut self,
+        measurements: &[Measurement<T, M>],
+        observation_model: &Obs,
+        clutter_model: &Clutter,
+        max_iterations: usize,
+        tolerance: T,
+    ) -> (LmbFilterState<T, N, Updated>, UpdateStats)
+    where
+        Obs: NonlinearObservationModel<T, N, M>,
+        Clutter: ClutterModel<T, M>,
+    {
+        let mut stats = UpdateStats::default();
+        let n_tracks = self.tracks.len();
+        let n_meas = measurements.len();
+
+        if n_tracks == 0 {
+            return (
+                LmbFilterState {
+                    tracks: self.tracks,
+                    label_gen: self.label_gen,
+                    time_step: self.time_step,
+                    _phase: PhantomData,
+                },
+                stats,
+            );
+        }
+
+        let meas_noise = observation_model.measurement_noise();
+
+        // Precompute posteriors and likelihoods for all track-measurement pairs
+        let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
+        let mut likelihood_matrix: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
+        let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
+
+        for (i, track) in self.tracks.iter().enumerate() {
+            // Get detection probability (use first component's mean)
+            let p_d = track
+                .components
+                .iter()
+                .next()
+                .map(|c| observation_model.detection_probability(&c.mean))
+                .unwrap_or(T::zero());
+            detection_probs.push(p_d);
+
+            for (j, measurement) in measurements.iter().enumerate() {
+                // Sum likelihood over all components
+                let mut total_likelihood = T::zero();
+                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> =
+                    None;
+                let mut best_weight = T::zero();
+
+                for component in track.components.iter() {
+                    // EKF: Linearize at component mean
+                    let obs_matrix = match observation_model.jacobian_at(&component.mean) {
+                        Some(h) => h,
+                        None => {
+                            // Jacobian undefined (e.g., target at sensor)
+                            stats.singular_covariance_count += 1;
+                            continue;
+                        }
+                    };
+
+                    // EKF: Predicted measurement using nonlinear function
+                    let predicted_meas = observation_model.observe(&component.mean);
+
+                    // Innovation in measurement space: y = z - h(x)
+                    let innovation = measurement.innovation(predicted_meas);
+
+                    let innovation_cov = compute_innovation_covariance(
+                        &component.covariance,
+                        &obs_matrix,
+                        &meas_noise,
+                    );
+
+                    // Compute likelihood
+                    let likelihood = crate::types::gaussian::innovation_likelihood(
+                        &innovation,
+                        innovation_cov.as_matrix(),
+                    );
+
+                    if likelihood <= T::zero() {
+                        stats.zero_likelihood_count += 1;
+                        continue;
+                    }
+
+                    let weighted_likelihood = component.weight * likelihood;
+                    total_likelihood += weighted_likelihood;
+
+                    // Track best posterior for this component
+                    if weighted_likelihood > best_weight {
+                        if let Some(kalman_gain) =
+                            compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
+                        {
+                            let correction = kalman_gain.correct(&innovation);
+                            let updated_mean = StateVector::from_svector(
+                                component.mean.as_svector() + correction.as_svector(),
+                            );
+                            let updated_cov = joseph_update(
+                                &component.covariance,
+                                &kalman_gain,
+                                &obs_matrix,
+                                &meas_noise,
+                            );
+
+                            best_posterior = Some((updated_mean, updated_cov, likelihood));
+                            best_weight = weighted_likelihood;
+                        } else {
+                            stats.singular_covariance_count += 1;
+                        }
+                    }
+                }
+
+                likelihood_matrix[i][j] = total_likelihood;
+                if let Some(posterior) = best_posterior {
+                    posteriors.set(i, j, posterior);
+                }
+            }
+        }
+
+        // Compute association weights using LBP
+        let (marginal_weights, existence_updates) = loopy_belief_propagation(
+            &likelihood_matrix,
+            &detection_probs,
+            &self.tracks.existence_probabilities(),
+            measurements,
+            clutter_model,
+            max_iterations,
+            tolerance,
+        );
+
+        // Update tracks with association results
+        for (i, track) in self.tracks.iter_mut().enumerate() {
+            // Update existence probability
+            track.existence = existence_updates[i];
+
+            if n_meas == 0 {
+                // No measurements - missed detection only
+                continue;
+            }
+
+            // Create new mixture based on association weights
+            let mut new_components =
+                crate::types::gaussian::GaussianMixture::with_capacity(n_meas + 1);
+
+            // Miss detection component (weight = marginal_weights[i][0])
+            let miss_weight = marginal_weights[i][0];
+            if miss_weight > T::from(1e-10).unwrap() {
+                for component in track.components.iter() {
+                    new_components.push(GaussianState {
+                        weight: component.weight * miss_weight,
+                        mean: component.mean,
+                        covariance: component.covariance,
+                    });
+                }
+            }
+
+            // Detection components (one for each measurement)
+            for j in 0..n_meas {
+                let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
+                if det_weight > T::from(1e-10).unwrap() {
+                    if let Some((mean, cov, _)) = posteriors.get(i, j) {
+                        new_components.push(GaussianState {
+                            weight: det_weight,
+                            mean: *mean,
+                            covariance: *cov,
+                        });
+                    }
+                }
+            }
+
+            // Normalize weights
+            let total_weight = new_components.total_weight();
+            if total_weight > T::zero() {
+                for component in new_components.iter_mut() {
+                    component.weight /= total_weight;
+                }
+            }
+
+            track.components = new_components;
+        }
+
+        (
+            LmbFilterState {
+                tracks: self.tracks,
+                label_gen: self.label_gen,
+                time_step: self.time_step,
+                _phase: PhantomData,
+            },
+            stats,
+        )
     }
 }
 

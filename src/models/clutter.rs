@@ -219,6 +219,118 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 3> for UniformClutter3D<T> {
 }
 
 // ============================================================================
+// Polar/Range-Bearing Clutter
+// ============================================================================
+
+/// Uniform clutter in range-bearing (polar) measurement space.
+///
+/// This clutter model is appropriate for radar-like sensors that measure
+/// in (range, bearing) coordinates rather than Cartesian (x, y).
+///
+/// The surveillance region is defined by:
+/// - Range bounds: [r_min, r_max]
+/// - Bearing bounds: [θ_min, θ_max] in radians
+///
+/// The "volume" in polar coordinates is the area of the annular sector:
+/// area = 0.5 * (r_max² - r_min²) * (θ_max - θ_min)
+#[derive(Debug, Clone)]
+pub struct UniformClutterRangeBearing<T: RealField> {
+    /// Expected number of clutter measurements per scan
+    clutter_rate: T,
+    /// Range bounds (min, max) in distance units
+    range_bounds: (T, T),
+    /// Bearing bounds (min, max) in radians, typically [-π, π] or [0, 2π]
+    bearing_bounds: (T, T),
+    /// Precomputed area of the annular sector
+    area: T,
+}
+
+impl<T: RealField + Float + Copy> UniformClutterRangeBearing<T> {
+    /// Creates uniform clutter in range-bearing space.
+    ///
+    /// # Arguments
+    /// - `clutter_rate`: Expected number of false alarms per scan (must be >= 0)
+    /// - `range_bounds`: (min, max) bounds for range (max > min >= 0)
+    /// - `bearing_bounds`: (min, max) bounds for bearing in radians (max > min)
+    ///
+    /// # Panics
+    /// Panics if bounds are invalid or clutter_rate is negative.
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Clutter in a radar field of view: range 0-1000m, bearing ±60°
+    /// let clutter = UniformClutterRangeBearing::new(
+    ///     10.0,                    // 10 expected false alarms per scan
+    ///     (0.0, 1000.0),           // range: 0 to 1000 meters
+    ///     (-1.047, 1.047),         // bearing: -60° to +60° (in radians)
+    /// );
+    /// ```
+    pub fn new(clutter_rate: T, range_bounds: (T, T), bearing_bounds: (T, T)) -> Self {
+        assert!(
+            clutter_rate >= T::zero(),
+            "Clutter rate must be non-negative"
+        );
+        assert!(
+            range_bounds.0 >= T::zero(),
+            "Minimum range must be non-negative"
+        );
+        assert!(
+            range_bounds.1 > range_bounds.0,
+            "range_bounds must have max > min"
+        );
+        assert!(
+            bearing_bounds.1 > bearing_bounds.0,
+            "bearing_bounds must have max > min"
+        );
+
+        // Area of annular sector: 0.5 * (r_max² - r_min²) * Δθ
+        let r_min_sq = range_bounds.0 * range_bounds.0;
+        let r_max_sq = range_bounds.1 * range_bounds.1;
+        let delta_theta = bearing_bounds.1 - bearing_bounds.0;
+        let half = T::from_f64(0.5).unwrap();
+        let area = half * (r_max_sq - r_min_sq) * delta_theta;
+
+        Self {
+            clutter_rate,
+            range_bounds,
+            bearing_bounds,
+            area,
+        }
+    }
+
+    /// Creates uniform clutter for a full 360° field of view.
+    ///
+    /// # Arguments
+    /// - `clutter_rate`: Expected number of false alarms per scan
+    /// - `max_range`: Maximum detection range (min range is 0)
+    pub fn full_circle(clutter_rate: T, max_range: T) -> Self {
+        let pi = T::from_f64(core::f64::consts::PI).unwrap();
+        Self::new(clutter_rate, (T::zero(), max_range), (-pi, pi))
+    }
+
+    /// Checks if a measurement is within the surveillance region.
+    pub fn contains(&self, measurement: &Measurement<T, 2>) -> bool {
+        let range = *measurement.index(0);
+        let bearing = *measurement.index(1);
+
+        range >= self.range_bounds.0
+            && range <= self.range_bounds.1
+            && bearing >= self.bearing_bounds.0
+            && bearing <= self.bearing_bounds.1
+    }
+}
+
+impl<T: RealField + Float + Copy> ClutterModel<T, 2> for UniformClutterRangeBearing<T> {
+    fn clutter_rate(&self) -> T {
+        self.clutter_rate
+    }
+
+    fn clutter_density(&self, _measurement: &Measurement<T, 2>) -> T {
+        T::one() / self.area
+    }
+}
+
+// ============================================================================
 // Non-uniform Clutter
 // ============================================================================
 
@@ -322,5 +434,61 @@ mod tests {
         let intensity = clutter.clutter_intensity(&measurement);
         // intensity = rate * density = 10 * 0.0001 = 0.001
         assert!((intensity - 0.001).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_uniform_clutter_range_bearing() {
+        use core::f64::consts::PI;
+
+        // Full 360° coverage, range 0-100
+        let clutter = UniformClutterRangeBearing::new(10.0_f64, (0.0, 100.0), (-PI, PI));
+
+        assert!((clutter.clutter_rate() - 10.0).abs() < 1e-10);
+
+        // Area = 0.5 * (100² - 0²) * 2π = 0.5 * 10000 * 2π = 10000π ≈ 31415.93
+        let expected_area = 0.5 * 10000.0 * 2.0 * PI;
+        let density = clutter.clutter_density(&Measurement::from_array([50.0, 0.0]));
+        let expected_density = 1.0 / expected_area;
+
+        assert!(
+            (density - expected_density).abs() < 1e-10,
+            "Expected density {}, got {}",
+            expected_density,
+            density
+        );
+    }
+
+    #[test]
+    fn test_range_bearing_clutter_contains() {
+        use core::f64::consts::PI;
+
+        let clutter = UniformClutterRangeBearing::new(10.0_f64, (10.0, 100.0), (-PI / 2.0, PI / 2.0));
+
+        // Inside: range 50, bearing 0
+        let inside = Measurement::from_array([50.0, 0.0]);
+        assert!(clutter.contains(&inside));
+
+        // Outside: range too small
+        let too_close = Measurement::from_array([5.0, 0.0]);
+        assert!(!clutter.contains(&too_close));
+
+        // Outside: range too large
+        let too_far = Measurement::from_array([150.0, 0.0]);
+        assert!(!clutter.contains(&too_far));
+
+        // Outside: bearing outside bounds
+        let wrong_bearing = Measurement::from_array([50.0, 2.0]); // ~115°, outside ±90°
+        assert!(!clutter.contains(&wrong_bearing));
+    }
+
+    #[test]
+    fn test_range_bearing_clutter_full_circle() {
+        let clutter = UniformClutterRangeBearing::full_circle(5.0_f64, 200.0);
+
+        assert!((clutter.clutter_rate() - 5.0).abs() < 1e-10);
+
+        // Should contain any point within range
+        let inside = Measurement::from_array([100.0, 3.0]); // ~172°
+        assert!(clutter.contains(&inside));
     }
 }
