@@ -94,9 +94,7 @@ pub fn elementary_symmetric_function_fixed<T: RealField + Copy, const N: usize>(
         core::mem::swap(&mut f_prev, &mut f_curr);
     }
 
-    for k in 0..N.min(z.len() + 1) {
-        result[k] = f_prev[k];
-    }
+    result[..N.min(z.len() + 1)].copy_from_slice(&f_prev[..N.min(z.len() + 1)]);
     result
 }
 

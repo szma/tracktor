@@ -746,9 +746,9 @@ fn loopy_belief_propagation<
 
         // Compute column sums of sigma_tm
         let mut sigma_tm_col_sums: Vec<T> = vec![T::zero(); n_meas];
-        for i in 0..n_tracks {
+        for row in sigma_tm.iter().take(n_tracks) {
             for j in 0..n_meas {
-                sigma_tm_col_sums[j] += sigma_tm[i][j];
+                sigma_tm_col_sums[j] += row[j];
             }
         }
 
@@ -796,8 +796,8 @@ fn loopy_belief_propagation<
         let mut gamma = Vec::with_capacity(n_meas + 1);
         gamma.push(phi[i]); // Miss detection
 
-        for j in 0..n_meas {
-            gamma.push(b[i][j] * eta[i]);
+        for b_val in b[i].iter().take(n_meas) {
+            gamma.push(*b_val * eta[i]);
         }
 
         let gamma_sum: T = gamma.iter().fold(T::zero(), |acc, &x| acc + x);

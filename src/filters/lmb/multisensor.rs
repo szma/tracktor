@@ -152,11 +152,7 @@ where
         let mut sensor_states: Vec<LmbFilterState<T, N, Updated>> = Vec::with_capacity(num_sensors);
         let mut combined_stats = UpdateStats::default();
 
-        for (_i, (measurements, config)) in sensor_measurements
-            .iter()
-            .zip(sensor_configs.iter())
-            .enumerate()
-        {
+        for (measurements, config) in sensor_measurements.iter().zip(sensor_configs.iter()) {
             // Clone predicted state for this sensor
             let sensor_predicted = LmbFilterState::<T, N, Predicted>::from_components(
                 predicted.tracks.clone(),

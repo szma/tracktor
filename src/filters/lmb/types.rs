@@ -535,6 +535,7 @@ impl<T: RealField + Float + Copy, const N: usize> Default for LmbmState<T, N> {
 pub struct PosteriorGrid<T: RealField, const N: usize> {
     /// Posteriors indexed by [track_idx][measurement_idx]
     /// Each entry is (updated_mean, updated_covariance, likelihood)
+    #[allow(clippy::type_complexity)]
     pub posteriors: Vec<Vec<Option<(StateVector<T, N>, StateCovariance<T, N>, T)>>>,
 }
 

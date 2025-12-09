@@ -237,7 +237,7 @@ impl<T: RealField + Float + Copy, const N: usize> SigmaPoints<T, N> {
         F: Fn(&StateVector<T, N>) -> SVector<T, D>,
     {
         // Transform all sigma points
-        let transformed: Vec<SVector<T, D>> = self.points.iter().map(|p| transform(p)).collect();
+        let transformed: Vec<SVector<T, D>> = self.points.iter().map(transform).collect();
 
         // Compute mean
         let mut mean = transformed[0].scale(self.weight_mean_0);
@@ -246,12 +246,12 @@ impl<T: RealField + Float + Copy, const N: usize> SigmaPoints<T, N> {
         }
 
         // Compute covariance
-        let diff0 = &transformed[0] - &mean;
-        let mut cov = (&diff0 * diff0.transpose()).scale(self.weight_cov_0);
+        let diff0 = transformed[0] - mean;
+        let mut cov = (diff0 * diff0.transpose()).scale(self.weight_cov_0);
 
         for t in transformed.iter().skip(1) {
-            let diff = t - &mean;
-            cov += (&diff * diff.transpose()).scale(self.weight_i);
+            let diff = t - mean;
+            cov += (diff * diff.transpose()).scale(self.weight_i);
         }
 
         // Add noise if provided
@@ -274,12 +274,12 @@ impl<T: RealField + Float + Copy, const N: usize> SigmaPoints<T, N> {
     {
         let state_diff0 = self.points[0].as_svector() - state_mean;
         let trans_diff0 = transform(&self.points[0]) - transformed_mean;
-        let mut cross_cov = (&state_diff0 * trans_diff0.transpose()).scale(self.weight_cov_0);
+        let mut cross_cov = (state_diff0 * trans_diff0.transpose()).scale(self.weight_cov_0);
 
         for point in self.points.iter().skip(1) {
             let state_diff = point.as_svector() - state_mean;
             let trans_diff = transform(point) - transformed_mean;
-            cross_cov += (&state_diff * trans_diff.transpose()).scale(self.weight_i);
+            cross_cov += (state_diff * trans_diff.transpose()).scale(self.weight_i);
         }
 
         cross_cov
@@ -418,14 +418,14 @@ where
         let kalman_gain = cross_cov * z_cov_inv;
 
         // Innovation
-        let innovation = measurement.as_svector() - &z_mean;
+        let innovation = measurement.as_svector() - z_mean;
 
         // Update mean
-        let updated_mean = state.mean.as_svector() + &kalman_gain * &innovation;
+        let updated_mean = state.mean.as_svector() + kalman_gain * innovation;
 
         // Update covariance: P = P - K * P_zz * K^T
         let updated_cov =
-            state.covariance.as_matrix() - &kalman_gain * &z_cov * kalman_gain.transpose();
+            state.covariance.as_matrix() - kalman_gain * z_cov * kalman_gain.transpose();
 
         Some(UkfState {
             mean: StateVector::from_svector(updated_mean),
@@ -458,7 +458,7 @@ where
             Some(r.as_matrix()),
         );
 
-        let innovation = measurement.as_svector() - &z_mean;
+        let innovation = measurement.as_svector() - z_mean;
         let innovation_typed =
             crate::types::spaces::Innovation::from_svector(innovation.clone_owned());
         let cov_typed = crate::types::spaces::Covariance::from_matrix(z_cov);
@@ -481,9 +481,9 @@ where
         );
 
         let z_cov_inv = z_cov.try_inverse()?;
-        let innovation = measurement.as_svector() - &z_mean;
+        let innovation = measurement.as_svector() - z_mean;
 
-        let d_sq = (innovation.transpose() * z_cov_inv * &innovation)[(0, 0)];
+        let d_sq = (innovation.transpose() * z_cov_inv * innovation)[(0, 0)];
         Some(d_sq)
     }
 }
@@ -566,10 +566,10 @@ where
         let z_cov_inv = z_cov.try_inverse()?;
         let kalman_gain = cross_cov * z_cov_inv;
 
-        let innovation = measurement.as_svector() - &z_mean;
-        let updated_mean = state.mean.as_svector() + &kalman_gain * &innovation;
+        let innovation = measurement.as_svector() - z_mean;
+        let updated_mean = state.mean.as_svector() + kalman_gain * innovation;
         let updated_cov =
-            state.covariance.as_matrix() - &kalman_gain * &z_cov * kalman_gain.transpose();
+            state.covariance.as_matrix() - kalman_gain * z_cov * kalman_gain.transpose();
 
         Some(UkfState {
             mean: StateVector::from_svector(updated_mean),
@@ -623,7 +623,7 @@ where
     T: RealField + Float + Copy,
     F: Fn(&StateVector<T, N>) -> SVector<T, D>,
 {
-    let state = UkfState::new(mean.clone(), cov.clone());
+    let state = UkfState::new(*mean, *cov);
     let sigma_points = SigmaPoints::generate(&state, params)?;
     Some(sigma_points.recover_mean_cov(transform, additive_noise))
 }
