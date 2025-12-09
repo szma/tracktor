@@ -6,7 +6,7 @@ license = "AGPL-3.0-or-later"
 description = "Multi-target tracking with random finite sets"
 repository = "https://github.com/szma/tracktor"
 keywords = ["math", "simulation", "tracking", "kalman", "rfs"]
-categories = ["science", "mathematics","algorithms", "no_std"]
+categories = ["science", "mathematics","algorithms"]
 
 [features]
 default = ["std"]
