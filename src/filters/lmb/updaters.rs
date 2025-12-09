@@ -135,9 +135,9 @@ impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N> for Margina
 
         // Sort by weight and truncate if needed
         if new_components.len() > self.max_components {
-            new_components.components.sort_by(|a, b| {
-                b.weight.partial_cmp(&a.weight).unwrap()
-            });
+            new_components
+                .components
+                .sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap());
             new_components.components.truncate(self.max_components);
 
             // Renormalize after truncation
@@ -198,11 +198,7 @@ impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N> for HardAss
         let state = if best_idx == 0 {
             // Miss detection - use best existing component
             track.best_estimate().cloned().unwrap_or_else(|| {
-                GaussianState::new(
-                    T::one(),
-                    StateVector::zeros(),
-                    StateCovariance::identity(),
-                )
+                GaussianState::new(T::one(), StateVector::zeros(), StateCovariance::identity())
             })
         } else {
             // Detection - use posterior for measurement (best_idx - 1)
@@ -212,11 +208,7 @@ impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N> for HardAss
                 GaussianState::new(T::one(), *mean, *cov)
             } else {
                 track.best_estimate().cloned().unwrap_or_else(|| {
-                    GaussianState::new(
-                        T::one(),
-                        StateVector::zeros(),
-                        StateCovariance::identity(),
-                    )
+                    GaussianState::new(T::one(), StateVector::zeros(), StateCovariance::identity())
                 })
             }
         };
@@ -253,9 +245,7 @@ impl SampledAssignmentUpdater {
 }
 
 #[cfg(feature = "alloc")]
-impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N>
-    for SampledAssignmentUpdater
-{
+impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N> for SampledAssignmentUpdater {
     type OutputTrack = BernoulliTrack<T, N>;
 
     fn update_track(
@@ -268,11 +258,7 @@ impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N>
         let state = if self.assignment < 0 {
             // Miss detection
             track.best_estimate().cloned().unwrap_or_else(|| {
-                GaussianState::new(
-                    T::one(),
-                    StateVector::zeros(),
-                    StateCovariance::identity(),
-                )
+                GaussianState::new(T::one(), StateVector::zeros(), StateCovariance::identity())
             })
         } else {
             // Detection
@@ -282,11 +268,7 @@ impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N>
                 GaussianState::new(T::one(), *mean, *cov)
             } else {
                 track.best_estimate().cloned().unwrap_or_else(|| {
-                    GaussianState::new(
-                        T::one(),
-                        StateVector::zeros(),
-                        StateCovariance::identity(),
-                    )
+                    GaussianState::new(T::one(), StateVector::zeros(), StateCovariance::identity())
                 })
             }
         };
@@ -306,10 +288,7 @@ impl<T: RealField + Float + Copy, const N: usize> TrackUpdater<T, N>
 /// Computes the updated existence probability for a missed detection.
 ///
 /// r' = r * (1 - p_d) / (1 - r * p_d)
-pub fn existence_update_miss<T: RealField + Float + Copy>(
-    existence: T,
-    detection_prob: T,
-) -> T {
+pub fn existence_update_miss<T: RealField + Float + Copy>(existence: T, detection_prob: T) -> T {
     let numerator = existence * (T::one() - detection_prob);
     let denominator = T::one() - existence * detection_prob;
     if denominator > T::zero() {

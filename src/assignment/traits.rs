@@ -294,12 +294,7 @@ impl<T: RealField + Float + Copy> Associator<T> for LbpAssociator {
         let n_meas = matrices.num_measurements();
 
         if n_tracks == 0 {
-            return Ok(AssociationResult::new(
-                Vec::new(),
-                Vec::new(),
-                0,
-                true,
-            ));
+            return Ok(AssociationResult::new(Vec::new(), Vec::new(), 0, true));
         }
 
         // Initialize messages

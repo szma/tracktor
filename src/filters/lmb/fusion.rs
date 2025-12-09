@@ -102,9 +102,9 @@ impl<T: RealField + Float + Copy, const N: usize> Merger<T, N> for ArithmeticAve
         }
 
         // Sort by weight and truncate
-        all_components.components.sort_by(|a, b| {
-            b.weight.partial_cmp(&a.weight).unwrap()
-        });
+        all_components
+            .components
+            .sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap());
         if all_components.len() > self.max_components {
             all_components.components.truncate(self.max_components);
         }
@@ -166,20 +166,22 @@ impl<T: RealField + Float + Copy, const N: usize> Merger<T, N> for GeometricAver
 
         // Geometric mean of existence: r_fused = prod(r_i^w_i)
         let epsilon = T::from_f64(1e-10).unwrap();
-        let fused_existence = tracks
-            .iter()
-            .zip(&normalized_weights)
-            .fold(T::one(), |acc, (track, &w)| {
-                let clamped = if track.existence > epsilon { track.existence } else { epsilon };
-                acc * Float::powf(clamped, w)
-            });
+        let fused_existence =
+            tracks
+                .iter()
+                .zip(&normalized_weights)
+                .fold(T::one(), |acc, (track, &w)| {
+                    let clamped = if track.existence > epsilon {
+                        track.existence
+                    } else {
+                        epsilon
+                    };
+                    acc * Float::powf(clamped, w)
+                });
 
         // Fuse best components using covariance intersection
         // Get best component from each track
-        let best_components: Vec<_> = tracks
-            .iter()
-            .filter_map(|t| t.best_estimate())
-            .collect();
+        let best_components: Vec<_> = tracks.iter().filter_map(|t| t.best_estimate()).collect();
 
         if best_components.is_empty() {
             return LmbTrack::new(
@@ -280,10 +282,7 @@ impl<T: RealField + Float + Copy, const N: usize> Merger<T, N> for ParallelUpdat
             .fold(T::zero(), |acc, (track, &w)| acc + w * track.existence);
 
         // Get best components
-        let best_components: Vec<_> = tracks
-            .iter()
-            .filter_map(|t| t.best_estimate())
-            .collect();
+        let best_components: Vec<_> = tracks.iter().filter_map(|t| t.best_estimate()).collect();
 
         if best_components.is_empty() {
             return LmbTrack::new(
@@ -364,8 +363,7 @@ impl<T: RealField + Float + Copy, const N: usize> Merger<T, N> for IteratedCorre
             let w = weights.get(i).copied().unwrap_or(T::one());
 
             // Update existence: blend toward track's existence
-            current.existence =
-                (T::one() - w) * current.existence + w * track.existence;
+            current.existence = (T::one() - w) * current.existence + w * track.existence;
 
             // Fuse best component with Kalman-like update
             if let (Some(curr_best), Some(track_best)) =
@@ -386,9 +384,10 @@ impl<T: RealField + Float + Copy, const N: usize> Merger<T, N> for IteratedCorre
                         + track_best.covariance.as_matrix().scale(alpha),
                 );
 
-                current.components = crate::types::gaussian::GaussianMixture::from_components(vec![
-                    GaussianState::new(T::one(), fused_mean, fused_cov),
-                ]);
+                current.components =
+                    crate::types::gaussian::GaussianMixture::from_components(vec![
+                        GaussianState::new(T::one(), fused_mean, fused_cov),
+                    ]);
             }
         }
 

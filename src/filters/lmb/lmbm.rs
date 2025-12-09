@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 
 use super::filter::LabeledBirthModel;
 use super::types::{LmbmHypothesis, LmbmState, PosteriorGrid};
-use crate::filters::phd::{Predicted, Updated, UpdateStats};
+use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
@@ -258,13 +258,13 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                     let (updated_state, r_updated) = if let Some(j) = assigned_meas {
                         // Detection
                         if let Some((mean, cov, likelihood)) = posteriors.get(i, j) {
-                            let r_updated =
-                                super::updaters::existence_update_detection(track.existence, p_d, *likelihood);
+                            let r_updated = super::updaters::existence_update_detection(
+                                track.existence,
+                                p_d,
+                                *likelihood,
+                            );
                             log_weight_delta += ComplexField::ln(*likelihood);
-                            (
-                                GaussianState::new(T::one(), *mean, *cov),
-                                r_updated,
-                            )
+                            (GaussianState::new(T::one(), *mean, *cov), r_updated)
                         } else {
                             (track.state.clone(), track.existence)
                         }
@@ -549,7 +549,8 @@ mod tests {
     fn test_lmbm_hypothesis_creation() {
         let label = Label::new(0, 0);
         let mean: StateVector<f64, 4> = StateVector::from_array([1.0, 2.0, 0.0, 0.0]);
-        let cov: crate::types::spaces::StateCovariance<f64, 4> = crate::types::spaces::StateCovariance::identity();
+        let cov: crate::types::spaces::StateCovariance<f64, 4> =
+            crate::types::spaces::StateCovariance::identity();
         let state = GaussianState::new(1.0, mean, cov);
         let track = BernoulliTrack::new(label, 0.9, state);
 

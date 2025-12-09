@@ -16,7 +16,7 @@ use super::fusion::{
     ParallelUpdateMerger,
 };
 use super::types::{LmbTrack, LmbTrackSet};
-use crate::filters::phd::{Predicted, Updated, UpdateStats};
+use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, ObservationModel, TransitionModel};
 use crate::types::labels::Label;
 use crate::types::spaces::{Measurement, StateCovariance};
@@ -83,12 +83,7 @@ where
     Mrg: Merger<T, N> + Clone,
 {
     /// Creates a new multi-sensor LMB filter.
-    pub fn new(
-        transition: Trans,
-        birth: Birth,
-        merger: Mrg,
-        num_sensors: usize,
-    ) -> Self {
+    pub fn new(transition: Trans, birth: Birth, merger: Mrg, num_sensors: usize) -> Self {
         let uniform_weight = T::one() / T::from(num_sensors).unwrap();
         Self {
             transition,
@@ -154,8 +149,7 @@ where
         let predicted = state.predict(&self.transition, &self.birth, dt);
 
         // Process each sensor independently
-        let mut sensor_states: Vec<LmbFilterState<T, N, Updated>> =
-            Vec::with_capacity(num_sensors);
+        let mut sensor_states: Vec<LmbFilterState<T, N, Updated>> = Vec::with_capacity(num_sensors);
         let mut combined_stats = UpdateStats::default();
 
         for (_i, (measurements, config)) in sensor_measurements
@@ -180,11 +174,7 @@ where
         }
 
         // Fuse sensor results
-        let fused_tracks = fuse_sensor_tracks(
-            &sensor_states,
-            &self.sensor_weights,
-            &self.merger,
-        );
+        let fused_tracks = fuse_sensor_tracks(&sensor_states, &self.sensor_weights, &self.merger);
 
         let fused_state = LmbFilterState::<T, N, Updated>::from_components(
             fused_tracks,
@@ -231,8 +221,7 @@ fn fuse_sensor_tracks<T: RealField + Float + Copy, const N: usize, M: Merger<T, 
             fused_tracks.push(track.clone());
         } else {
             // Multiple sensors - fuse
-            let track_refs: Vec<&LmbTrack<T, N>> =
-                sensor_tracks.iter().map(|(_, t)| *t).collect();
+            let track_refs: Vec<&LmbTrack<T, N>> = sensor_tracks.iter().map(|(_, t)| *t).collect();
             let weights: Vec<T> = sensor_tracks
                 .iter()
                 .map(|(idx, _)| sensor_weights.get(*idx).copied().unwrap_or(T::one()))

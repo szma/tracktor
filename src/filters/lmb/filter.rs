@@ -14,7 +14,7 @@ use super::cardinality::map_cardinality_estimate;
 use super::types::{LmbTrack, LmbTrackSet, PosteriorGrid};
 #[allow(unused_imports)]
 use super::updaters::TrackUpdater;
-use crate::filters::phd::{Predicted, Updated, UpdateStats};
+use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
@@ -198,7 +198,13 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         Obs: ObservationModel<T, N, M>,
         Clutter: ClutterModel<T, M>,
     {
-        self.update_with_lbp(measurements, observation_model, clutter_model, 50, T::from_f64(1e-6).unwrap())
+        self.update_with_lbp(
+            measurements,
+            observation_model,
+            clutter_model,
+            50,
+            T::from_f64(1e-6).unwrap(),
+        )
     }
 
     /// Updates with LBP association using custom parameters.
@@ -251,14 +257,18 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             for (j, measurement) in measurements.iter().enumerate() {
                 // Sum likelihood over all components
                 let mut total_likelihood = T::zero();
-                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> = None;
+                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> =
+                    None;
                 let mut best_weight = T::zero();
 
                 for component in track.components.iter() {
                     let predicted_meas = obs_matrix.observe(&component.mean);
                     let innovation = measurement.innovation(predicted_meas);
-                    let innovation_cov =
-                        compute_innovation_covariance(&component.covariance, &obs_matrix, &meas_noise);
+                    let innovation_cov = compute_innovation_covariance(
+                        &component.covariance,
+                        &obs_matrix,
+                        &meas_noise,
+                    );
 
                     // Compute likelihood
                     let likelihood = crate::types::gaussian::innovation_likelihood(
@@ -283,8 +293,12 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                             let updated_mean = StateVector::from_svector(
                                 component.mean.as_svector() + correction.as_svector(),
                             );
-                            let updated_cov =
-                                joseph_update(&component.covariance, &kalman_gain, &obs_matrix, &meas_noise);
+                            let updated_cov = joseph_update(
+                                &component.covariance,
+                                &kalman_gain,
+                                &obs_matrix,
+                                &meas_noise,
+                            );
 
                             best_posterior = Some((updated_mean, updated_cov, likelihood));
                             best_weight = weighted_likelihood;
@@ -323,7 +337,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             }
 
             // Create new mixture based on association weights
-            let mut new_components = crate::types::gaussian::GaussianMixture::with_capacity(n_meas + 1);
+            let mut new_components =
+                crate::types::gaussian::GaussianMixture::with_capacity(n_meas + 1);
 
             // Miss detection component (weight = marginal_weights[i][0])
             let miss_weight = marginal_weights[i][0];
@@ -389,7 +404,11 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
 /// - Marginal association weights: [n_tracks][n_meas + 1] where index 0 is miss
 /// - Updated existence probabilities
 #[cfg(feature = "alloc")]
-fn loopy_belief_propagation<T: RealField + Float + Copy, const M: usize, Clutter: ClutterModel<T, M>>(
+fn loopy_belief_propagation<
+    T: RealField + Float + Copy,
+    const M: usize,
+    Clutter: ClutterModel<T, M>,
+>(
     likelihood_matrix: &[Vec<T>],
     detection_probs: &[T],
     existence_probs: &[T],
@@ -397,10 +416,13 @@ fn loopy_belief_propagation<T: RealField + Float + Copy, const M: usize, Clutter
     clutter_model: &Clutter,
     max_iterations: usize,
     tolerance: T,
-) -> (Vec<Vec<T>>, Vec<T>)
-{
+) -> (Vec<Vec<T>>, Vec<T>) {
     let n_tracks = likelihood_matrix.len();
-    let n_meas = if n_tracks > 0 { likelihood_matrix[0].len() } else { 0 };
+    let n_meas = if n_tracks > 0 {
+        likelihood_matrix[0].len()
+    } else {
+        0
+    };
 
     if n_tracks == 0 || n_meas == 0 {
         // No measurements - all tracks get miss detection
@@ -689,10 +711,7 @@ where
     }
 
     /// Creates an initial filter state from prior tracks.
-    pub fn initial_state_from(
-        &self,
-        tracks: Vec<LmbTrack<T, N>>,
-    ) -> LmbFilterState<T, N, Updated> {
+    pub fn initial_state_from(&self, tracks: Vec<LmbTrack<T, N>>) -> LmbFilterState<T, N, Updated> {
         LmbFilterState::from_tracks(tracks)
     }
 
