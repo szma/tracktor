@@ -86,7 +86,7 @@ fn main() {
     );
 
     // Simulate measurements for 5 time steps
-    let measurements_per_step = vec![
+    let measurements_per_step = [
         // Time 0: Detections near both targets + clutter
         vec![[52.0, 51.0], [99.0, 102.0], [150.0, 30.0]],
         // Time 1: One detection, one miss

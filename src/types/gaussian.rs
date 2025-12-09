@@ -247,7 +247,7 @@ pub fn innovation_likelihood<T: RealField + Float + Copy, const M: usize>(
     let l = chol.l();
     let mut det_l = T::one();
     for i in 0..M {
-        det_l = det_l * l[(i, i)];
+        det_l *= l[(i, i)];
     }
     let det = det_l * det_l;
 
@@ -362,7 +362,7 @@ impl<T: RealField + Copy, const N: usize> GaussianMixture<T, N> {
     /// Scales all component weights by a factor.
     pub fn scale_weights(&mut self, factor: T) {
         for component in &mut self.components {
-            component.weight = component.weight * factor;
+            component.weight *= factor;
         }
     }
 }

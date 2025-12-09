@@ -215,9 +215,9 @@ pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, TracktorError> {
     }
 
     // Build row_assignment from col_assignment
-    for j in 0..n {
-        if let Some(i) = col_assignment[j] {
-            row_assignment[i] = Some(j);
+    for (j, col_asgn) in col_assignment.iter().enumerate().take(n) {
+        if let Some(i) = col_asgn {
+            row_assignment[*i] = Some(j);
         }
     }
 
@@ -225,11 +225,11 @@ pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, TracktorError> {
     let mut total_cost = 0.0;
     let mut result_mapping = Vec::with_capacity(n_rows);
 
-    for i in 0..n_rows {
-        if let Some(j) = row_assignment[i] {
-            if j < n_cols {
-                total_cost += cost.get(i, j);
-                result_mapping.push(Some(j));
+    for (i, row_asgn) in row_assignment.iter().enumerate().take(n_rows) {
+        if let Some(j) = row_asgn {
+            if *j < n_cols {
+                total_cost += cost.get(i, *j);
+                result_mapping.push(Some(*j));
             } else {
                 result_mapping.push(None);
             }
@@ -316,8 +316,8 @@ pub fn auction(
             let mut best_value = f64::NEG_INFINITY;
             let mut second_best = f64::NEG_INFINITY;
 
-            for j in 0..n_cols {
-                let value = -cost.get(i, j) - prices[j]; // Negative because we minimize
+            for (j, price) in prices.iter().enumerate().take(n_cols) {
+                let value = -cost.get(i, j) - price; // Negative because we minimize
                 if value > best_value {
                     second_best = best_value;
                     best_value = value;

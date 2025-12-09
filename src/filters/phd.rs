@@ -231,7 +231,7 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
                     }
 
                     let detection_weight = p_d * c.weight * likelihood;
-                    weight_sum = weight_sum + detection_weight;
+                    weight_sum += detection_weight;
 
                     detection_weight
                 })

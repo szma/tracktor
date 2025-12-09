@@ -163,6 +163,7 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 2> for UniformClutter2D<T> {
 
 /// Uniform clutter in a 3D rectangular region.
 #[derive(Debug, Clone)]
+#[allow(dead_code)] // Fields reserved for future use
 pub struct UniformClutter3D<T: RealField> {
     /// Expected number of clutter measurements per scan
     clutter_rate: T,

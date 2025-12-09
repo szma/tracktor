@@ -88,7 +88,11 @@ impl<T: Scalar, const N: usize, Space> Vector<T, N, Space> {
     }
 
     /// Access element at index (unchecked).
+    ///
+    /// # Panics
+    /// Panics if index is out of bounds.
     #[inline]
+    #[allow(clippy::should_implement_trait)]
     pub fn index(&self, index: usize) -> &T {
         &self.inner[index]
     }
@@ -325,7 +329,7 @@ impl<T: RealField + Copy, const N: usize, Space> Covariance<T, N, Space> {
         // det(A) = det(L)^2, and det(L) = product of diagonal elements
         let mut det_l = T::one();
         for i in 0..N {
-            det_l = det_l * l[(i, i)];
+            det_l *= l[(i, i)];
         }
         Some(det_l * det_l)
     }
