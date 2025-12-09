@@ -15,7 +15,7 @@ use nalgebra::RealField;
 /// The tuple `(birth_time, index)` guarantees uniqueness within a filter instance.
 /// - `birth_time`: The time step when the target was born
 /// - `index`: A unique index among targets born at the same time
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Label {
     /// Time step when the target was born
     pub birth_time: u32,
