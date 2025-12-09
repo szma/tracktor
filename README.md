@@ -1,8 +1,5 @@
 # Tracktor: Multi-Target Tracking Library for Rust
 
-## Design Document v0.1
-
----
 
 ## 1. Motivation
 
@@ -45,35 +42,6 @@ State and measurement dimensions are encoded as const generic parameters. Dimens
 ### 2.4 Explicit State Machines
 
 Filter phases (predicted vs. updated) are encoded in the type system. The compiler enforces correct operation ordering.
-
----
-
-## 3. Architecture Overview
-
-```
-tracktor/
-├── core/
-│   ├── spaces.rs       # Vector space markers and typed vectors
-│   ├── transforms.rs   # Typed matrices for space transformations
-│   ├── gaussian.rs     # Gaussian components and mixtures
-│   └── labels.rs       # Track labels for GLMB/LMB
-├── models/
-│   ├── transition.rs   # Motion model traits
-│   ├── observation.rs  # Sensor model traits
-│   ├── clutter.rs      # Clutter model traits
-│   └── birth.rs        # Birth model traits
-├── filters/
-│   ├── phd.rs          # GM-PHD filter
-│   ├── cphd.rs         # GM-CPHD filter
-│   ├── lmb.rs          # Labeled Multi-Bernoulli filter
-│   └── glmb.rs         # Generalized Labeled Multi-Bernoulli filter
-├── assignment/
-│   ├── hungarian.rs    # Hungarian algorithm
-│   └── murty.rs        # Murty's k-best assignments
-└── utils/
-    ├── pruning.rs      # Component pruning and merging
-    └── extraction.rs   # State extraction strategies
-```
 
 ---
 
