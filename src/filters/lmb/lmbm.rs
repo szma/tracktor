@@ -321,10 +321,10 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
 }
 
 // ============================================================================
-// K-Best Assignments (Simple Murty's)
+// K-Best Assignments (Murty's Algorithm)
 // ============================================================================
 
-/// Generates k-best assignments using a simplified Murty's algorithm.
+/// Generates k-best assignments using Murty's algorithm.
 ///
 /// Returns a vector of (assignment, cost) pairs, where assignment[i] is
 /// the measurement index assigned to track i (None for miss).
@@ -333,40 +333,12 @@ fn generate_k_best_assignments(
     cost_matrix: &crate::assignment::CostMatrix,
     k: usize,
 ) -> Vec<(Vec<Option<usize>>, f64)> {
-    use crate::assignment::hungarian;
+    use crate::assignment::murty_k_best;
 
-    let mut results = Vec::with_capacity(k);
-
-    // Get the best assignment using Hungarian algorithm
-    if let Ok(best) = hungarian(cost_matrix) {
-        results.push((best.mapping.clone(), best.cost));
-
-        // For simplicity, we only return the single best assignment
-        // A full Murty's implementation would partition the solution space
-        // and recursively find the next best assignments
-
-        // TODO: Implement full Murty's algorithm for k > 1
-        // For now, we generate variations by flipping individual assignments
-        if k > 1 {
-            let n_rows = cost_matrix.rows();
-            let _n_cols = cost_matrix.cols();
-
-            for i in 0..n_rows.min(k - 1) {
-                let mut modified = best.mapping.clone();
-                // Flip assignment i to miss
-                if modified[i].is_some() {
-                    let orig_j = modified[i].unwrap();
-                    let miss_cost = 0.0; // Miss detection has no cost
-                    let orig_cost = cost_matrix.get(i, orig_j);
-                    let new_cost = best.cost - orig_cost + miss_cost;
-                    modified[i] = None;
-                    results.push((modified, new_cost));
-                }
-            }
-        }
-    }
-
-    results
+    murty_k_best(cost_matrix, k)
+        .into_iter()
+        .map(|assignment| (assignment.mapping, assignment.cost))
+        .collect()
 }
 
 // ============================================================================

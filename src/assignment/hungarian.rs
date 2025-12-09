@@ -354,6 +354,270 @@ pub fn auction(
     Ok(Assignment::new(row_assignment, total_cost))
 }
 
+// ============================================================================
+// Murty's Algorithm for K-Best Assignments
+// ============================================================================
+
+/// A node in Murty's partition tree.
+///
+/// Each node represents a constrained assignment problem where some
+/// assignments are required (fixed) and others are forbidden (excluded).
+#[cfg(feature = "alloc")]
+#[derive(Debug, Clone)]
+struct MurtyNode {
+    /// The assignment solution for this node
+    assignment: Assignment,
+    /// Row indices that have fixed assignments (row -> col)
+    fixed: Vec<(usize, usize)>,
+    /// Excluded assignments (row, col) that cannot be made
+    excluded: Vec<(usize, usize)>,
+    /// The row index up to which we've partitioned
+    partition_row: usize,
+}
+
+#[cfg(feature = "alloc")]
+impl MurtyNode {
+    fn new(assignment: Assignment) -> Self {
+        Self {
+            assignment,
+            fixed: Vec::new(),
+            excluded: Vec::new(),
+            partition_row: 0,
+        }
+    }
+
+    fn with_constraints(
+        assignment: Assignment,
+        fixed: Vec<(usize, usize)>,
+        excluded: Vec<(usize, usize)>,
+        partition_row: usize,
+    ) -> Self {
+        Self {
+            assignment,
+            fixed,
+            excluded,
+            partition_row,
+        }
+    }
+}
+
+/// Solves a constrained assignment problem.
+///
+/// Some assignments are required (fixed) and some are forbidden (excluded).
+/// Returns None if no valid assignment exists.
+#[cfg(feature = "alloc")]
+fn hungarian_constrained(
+    cost: &CostMatrix,
+    fixed: &[(usize, usize)],
+    excluded: &[(usize, usize)],
+) -> Option<Assignment> {
+    let n_rows = cost.rows();
+    let n_cols = cost.cols();
+
+    if n_rows == 0 || n_cols == 0 {
+        return Some(Assignment::new(vec![], 0.0));
+    }
+
+    // Check for conflicting constraints
+    for &(r1, c1) in fixed {
+        for &(r2, c2) in fixed {
+            if r1 != r2 && c1 == c2 {
+                // Two different rows fixed to same column - infeasible
+                return None;
+            }
+        }
+        // Check if fixed assignment is also excluded
+        if excluded.contains(&(r1, c1)) {
+            return None;
+        }
+    }
+
+    // Create a modified cost matrix
+    let large = 1e20_f64;
+    let mut modified = CostMatrix::zeros(n_rows, n_cols);
+
+    for i in 0..n_rows {
+        for j in 0..n_cols {
+            modified.set(i, j, cost.get(i, j));
+        }
+    }
+
+    // Set excluded assignments to large cost
+    for &(row, col) in excluded {
+        if row < n_rows && col < n_cols {
+            modified.set(row, col, large);
+        }
+    }
+
+    // For fixed assignments, we need to ensure they're selected
+    // We do this by setting all other costs in that row/column to large
+    for &(row, col) in fixed {
+        if row < n_rows && col < n_cols {
+            // Set all other columns in this row to large cost
+            for j in 0..n_cols {
+                if j != col {
+                    modified.set(row, j, large);
+                }
+            }
+            // Set all other rows in this column to large cost
+            for i in 0..n_rows {
+                if i != row {
+                    modified.set(i, col, large);
+                }
+            }
+        }
+    }
+
+    // Solve using standard Hungarian
+    let result = hungarian(&modified).ok()?;
+
+    // Verify all fixed assignments were made
+    for &(row, col) in fixed {
+        if row < n_rows && result.mapping.get(row).copied().flatten() != Some(col) {
+            return None; // Fixed assignment not satisfied
+        }
+    }
+
+    // Verify no excluded assignments were made
+    for &(row, col) in excluded {
+        if row < n_rows && result.mapping.get(row).copied().flatten() == Some(col) {
+            return None; // Excluded assignment was made
+        }
+    }
+
+    // Recalculate cost using original cost matrix
+    let real_cost: f64 = result
+        .mapping
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &j)| j.filter(|&jj| jj < n_cols).map(|jj| cost.get(i, jj)))
+        .sum();
+
+    Some(Assignment::new(result.mapping, real_cost))
+}
+
+/// Finds the k-best assignments using Murty's algorithm.
+///
+/// Murty's algorithm partitions the solution space to efficiently find
+/// the k best solutions without exhaustive enumeration.
+///
+/// # Arguments
+/// - `cost`: The cost matrix
+/// - `k`: The number of best assignments to find
+///
+/// # Returns
+/// A vector of up to k assignments, sorted by cost (ascending).
+#[cfg(feature = "alloc")]
+pub fn murty_k_best(cost: &CostMatrix, k: usize) -> Vec<Assignment> {
+    use alloc::collections::BinaryHeap;
+    use core::cmp::Ordering;
+
+    if k == 0 {
+        return Vec::new();
+    }
+
+    // Wrapper for BinaryHeap (max-heap, but we want min-heap for costs)
+    #[derive(Debug)]
+    struct HeapNode(MurtyNode);
+
+    impl PartialEq for HeapNode {
+        fn eq(&self, other: &Self) -> bool {
+            self.0.assignment.cost == other.0.assignment.cost
+        }
+    }
+
+    impl Eq for HeapNode {}
+
+    impl PartialOrd for HeapNode {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl Ord for HeapNode {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // Reverse ordering for min-heap behavior
+            other
+                .0
+                .assignment
+                .cost
+                .partial_cmp(&self.0.assignment.cost)
+                .unwrap_or(Ordering::Equal)
+        }
+    }
+
+    let mut results: Vec<Assignment> = Vec::with_capacity(k);
+    let mut heap: BinaryHeap<HeapNode> = BinaryHeap::new();
+
+    // Get the optimal assignment
+    let best = match hungarian(cost) {
+        Ok(a) => a,
+        Err(_) => return Vec::new(),
+    };
+
+    // Add root node to heap
+    heap.push(HeapNode(MurtyNode::new(best)));
+
+    while results.len() < k {
+        // Get the best unexpanded node
+        let node = match heap.pop() {
+            Some(HeapNode(n)) => n,
+            None => break, // No more solutions
+        };
+
+        // Add this solution to results
+        results.push(node.assignment.clone());
+
+        if results.len() >= k {
+            break;
+        }
+
+        // Generate child nodes by partitioning
+        let n_rows = cost.rows();
+        let mapping = &node.assignment.mapping;
+
+        // For each assigned pair starting from partition_row, create a child
+        // where that assignment is excluded
+        for row in node.partition_row..n_rows {
+            if let Some(col) = mapping[row] {
+                // Create child node where (row, col) is excluded
+                let mut child_fixed = node.fixed.clone();
+                let mut child_excluded = node.excluded.clone();
+
+                // Fix all assignments before this row (same as in current solution)
+                for (prev_row, prev_col) in mapping
+                    .iter()
+                    .enumerate()
+                    .take(row)
+                    .skip(node.partition_row)
+                    .filter_map(|(r, c)| c.map(|col| (r, col)))
+                {
+                    if !child_fixed.iter().any(|&(r, _)| r == prev_row) {
+                        child_fixed.push((prev_row, prev_col));
+                    }
+                }
+
+                // Exclude the current (row, col) assignment
+                child_excluded.push((row, col));
+
+                // Solve the constrained problem
+                if let Some(child_assignment) =
+                    hungarian_constrained(cost, &child_fixed, &child_excluded)
+                {
+                    heap.push(HeapNode(MurtyNode::with_constraints(
+                        child_assignment,
+                        child_fixed,
+                        child_excluded,
+                        row,
+                    )));
+                }
+            }
+        }
+    }
+
+    results
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,5 +699,237 @@ mod tests {
             "Auction cost {} not within bounds",
             result.cost
         );
+    }
+
+    // ============================================================================
+    // Murty's Algorithm Tests
+    // ============================================================================
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_k1() {
+        // With k=1, should return same result as Hungarian
+        let cost =
+            CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 3, 3).unwrap();
+
+        let hungarian_result = hungarian(&cost).unwrap();
+        let murty_results = murty_k_best(&cost, 1);
+
+        assert_eq!(murty_results.len(), 1);
+        assert!(
+            (murty_results[0].cost - hungarian_result.cost).abs() < 0.01,
+            "Murty k=1 should match Hungarian: {} vs {}",
+            murty_results[0].cost,
+            hungarian_result.cost
+        );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_k3_ordering() {
+        // Test that results are returned in cost-ascending order
+        let cost =
+            CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 3, 3).unwrap();
+
+        let results = murty_k_best(&cost, 3);
+
+        assert!(results.len() >= 2, "Should find at least 2 solutions");
+
+        // Verify costs are non-decreasing
+        for i in 1..results.len() {
+            assert!(
+                results[i].cost >= results[i - 1].cost - 0.001,
+                "Results should be ordered: cost[{}]={} >= cost[{}]={}",
+                i,
+                results[i].cost,
+                i - 1,
+                results[i - 1].cost
+            );
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_unique_solutions() {
+        // Test that all returned solutions are unique
+        let cost =
+            CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 3, 3).unwrap();
+
+        let results = murty_k_best(&cost, 5);
+
+        // Check for duplicates
+        for i in 0..results.len() {
+            for j in (i + 1)..results.len() {
+                assert_ne!(
+                    results[i].mapping, results[j].mapping,
+                    "Solutions {} and {} should be different",
+                    i, j
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_2x2() {
+        // Simple 2x2 case where we can verify all solutions
+        // Cost matrix:
+        // [1, 10]
+        // [10, 2]
+        let cost = CostMatrix::from_vec(vec![1.0, 10.0, 10.0, 2.0], 2, 2).unwrap();
+
+        let results = murty_k_best(&cost, 2);
+
+        assert_eq!(results.len(), 2);
+
+        // Best: (0,0) + (1,1) = 1 + 2 = 3
+        assert!(
+            (results[0].cost - 3.0).abs() < 0.01,
+            "Best should be 3.0, got {}",
+            results[0].cost
+        );
+
+        // Second best: (0,1) + (1,0) = 10 + 10 = 20
+        assert!(
+            (results[1].cost - 20.0).abs() < 0.01,
+            "Second best should be 20.0, got {}",
+            results[1].cost
+        );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_3x3_comprehensive() {
+        // 3x3 case with known solutions
+        // Cost matrix:
+        // [1, 2, 3]
+        // [4, 5, 6]
+        // [7, 8, 9]
+        let cost =
+            CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0], 3, 3).unwrap();
+
+        let results = murty_k_best(&cost, 6);
+
+        // All 6 possible assignments for 3x3:
+        // Optimal: 0->2, 1->1, 2->0 = 3+5+7 = 15
+        assert!(
+            (results[0].cost - 15.0).abs() < 0.01,
+            "Optimal should be 15.0, got {}",
+            results[0].cost
+        );
+
+        // Verify all solutions are valid assignments
+        for (idx, result) in results.iter().enumerate() {
+            let mut cols_used: Vec<bool> = vec![false; 3];
+            for &col in &result.mapping {
+                if let Some(c) = col {
+                    assert!(
+                        !cols_used[c],
+                        "Solution {} has duplicate column assignment",
+                        idx
+                    );
+                    cols_used[c] = true;
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_rectangular() {
+        // Rectangular matrix (more rows than columns)
+        let cost = CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 3, 2).unwrap();
+
+        let results = murty_k_best(&cost, 3);
+
+        assert!(!results.is_empty(), "Should find at least one solution");
+
+        // Each solution should assign at most 2 rows (since we have 2 columns)
+        for result in &results {
+            let assigned = result.mapping.iter().filter(|x| x.is_some()).count();
+            assert!(
+                assigned <= 2,
+                "Should assign at most 2 rows, got {}",
+                assigned
+            );
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_empty() {
+        let cost = CostMatrix::zeros(0, 0);
+        let results = murty_k_best(&cost, 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].cost, 0.0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_murty_k0() {
+        let cost = CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0], 2, 2).unwrap();
+        let results = murty_k_best(&cost, 0);
+        assert!(results.is_empty());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_constrained_fixed() {
+        // Test that fixed constraints work
+        let cost = CostMatrix::from_vec(vec![1.0, 10.0, 10.0, 2.0], 2, 2).unwrap();
+
+        // Without constraints: optimal is (0,0)+(1,1) = 3
+        // Force (0,1) to be selected
+        let fixed = vec![(0, 1)];
+        let excluded = vec![];
+
+        let result = hungarian_constrained(&cost, &fixed, &excluded);
+
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_eq!(result.mapping[0], Some(1), "Row 0 should be fixed to col 1");
+        // Cost should be 10 + 10 = 20 (forced suboptimal)
+        assert!(
+            (result.cost - 20.0).abs() < 0.01,
+            "Cost should be 20.0, got {}",
+            result.cost
+        );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_constrained_excluded() {
+        // Test that excluded constraints work
+        let cost = CostMatrix::from_vec(vec![1.0, 10.0, 10.0, 2.0], 2, 2).unwrap();
+
+        // Without constraints: optimal is (0,0)+(1,1) = 3
+        // Exclude (0,0) - forces second best
+        let fixed = vec![];
+        let excluded = vec![(0, 0)];
+
+        let result = hungarian_constrained(&cost, &fixed, &excluded);
+
+        assert!(result.is_some());
+        let result = result.unwrap();
+        assert_ne!(
+            result.mapping[0],
+            Some(0),
+            "Row 0 should not be assigned to col 0"
+        );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_constrained_infeasible() {
+        // Test that infeasible constraints return None
+        let cost = CostMatrix::from_vec(vec![1.0, 2.0, 3.0, 4.0], 2, 2).unwrap();
+
+        // Fix both rows to same column - infeasible
+        let fixed = vec![(0, 0), (1, 0)];
+        let excluded = vec![];
+
+        let result = hungarian_constrained(&cost, &fixed, &excluded);
+
+        assert!(result.is_none(), "Should be infeasible");
     }
 }
