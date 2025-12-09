@@ -1,4 +1,4 @@
-//! MTT-RS: Multi-Target Tracking Library for Rust
+//! Tracktor: Multi-Target Tracking Library for Rust
 //!
 //! A type-safe implementation of Random Finite Set (RFS) based tracking algorithms.
 //!
@@ -31,7 +31,7 @@ pub mod prelude {
 
 /// Error types for the library
 #[derive(Debug, Clone, PartialEq)]
-pub enum MttError {
+pub enum TracktorError {
     /// Matrix is singular and cannot be inverted
     SingularMatrix,
     /// Numerical computation became unstable
@@ -43,17 +43,17 @@ pub enum MttError {
 }
 
 #[cfg(feature = "std")]
-impl std::error::Error for MttError {}
+impl std::error::Error for TracktorError {}
 
-impl ::core::fmt::Display for MttError {
+impl ::core::fmt::Display for TracktorError {
     fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
         match self {
-            MttError::SingularMatrix => write!(f, "Matrix is singular"),
-            MttError::NumericalInstability => write!(f, "Numerical instability detected"),
-            MttError::MaxComponentsExceeded => write!(f, "Maximum components exceeded"),
-            MttError::AssignmentFailed => write!(f, "Assignment algorithm failed"),
+            TracktorError::SingularMatrix => write!(f, "Matrix is singular"),
+            TracktorError::NumericalInstability => write!(f, "Numerical instability detected"),
+            TracktorError::MaxComponentsExceeded => write!(f, "Maximum components exceeded"),
+            TracktorError::AssignmentFailed => write!(f, "Assignment algorithm failed"),
         }
     }
 }
 
-pub type Result<T> = ::core::result::Result<T, MttError>;
+pub type Result<T> = ::core::result::Result<T, TracktorError>;

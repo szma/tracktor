@@ -6,7 +6,7 @@
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::MttError;
+use crate::TracktorError;
 
 /// Result of an assignment problem.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,9 +53,9 @@ pub struct CostMatrix {
 #[cfg(feature = "alloc")]
 impl CostMatrix {
     /// Creates a cost matrix from row-major data.
-    pub fn from_vec(data: Vec<f64>, rows: usize, cols: usize) -> Result<Self, MttError> {
+    pub fn from_vec(data: Vec<f64>, rows: usize, cols: usize) -> Result<Self, TracktorError> {
         if data.len() != rows * cols {
-            return Err(MttError::AssignmentFailed);
+            return Err(TracktorError::AssignmentFailed);
         }
         Ok(Self { data, rows, cols })
     }
@@ -111,7 +111,7 @@ impl CostMatrix {
 /// # Returns
 /// An `Assignment` with the optimal row-to-column mapping.
 #[cfg(feature = "alloc")]
-pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, MttError> {
+pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, TracktorError> {
     let n_rows = cost.rows();
     let n_cols = cost.cols();
 
@@ -243,7 +243,7 @@ pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, MttError> {
 ///
 /// Assignments with cost above the threshold are not made.
 #[cfg(feature = "alloc")]
-pub fn hungarian_gated(cost: &CostMatrix, gate_threshold: f64) -> Result<Assignment, MttError> {
+pub fn hungarian_gated(cost: &CostMatrix, gate_threshold: f64) -> Result<Assignment, TracktorError> {
     // Create a gated cost matrix
     let mut gated = CostMatrix::zeros(cost.rows(), cost.cols());
     let large = 1e20_f64;
@@ -282,7 +282,7 @@ pub fn hungarian_gated(cost: &CostMatrix, gate_threshold: f64) -> Result<Assignm
 ///
 /// Better for sparse problems or when approximate solutions are acceptable.
 #[cfg(feature = "alloc")]
-pub fn auction(cost: &CostMatrix, epsilon: f64, max_iter: usize) -> Result<Assignment, MttError> {
+pub fn auction(cost: &CostMatrix, epsilon: f64, max_iter: usize) -> Result<Assignment, TracktorError> {
     let n_rows = cost.rows();
     let n_cols = cost.cols();
 

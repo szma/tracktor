@@ -419,9 +419,9 @@ impl<T: RealField + Copy, const N: usize, const MAX: usize> FixedGaussianMixture
     }
 
     /// Attempts to add a component. Returns Err if at capacity.
-    pub fn try_push(&mut self, component: GaussianState<T, N>) -> Result<(), crate::MttError> {
+    pub fn try_push(&mut self, component: GaussianState<T, N>) -> Result<(), crate::TracktorError> {
         if self.len >= MAX {
-            return Err(crate::MttError::MaxComponentsExceeded);
+            return Err(crate::TracktorError::MaxComponentsExceeded);
         }
         self.components[self.len].write(component);
         self.len += 1;

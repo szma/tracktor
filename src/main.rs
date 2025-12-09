@@ -1,4 +1,4 @@
-//! Example usage of the MTT-RS library
+//! Example usage of the Tracktor library
 //!
 //! Demonstrates a simple multi-target tracking scenario using the GM-PHD filter.
 
@@ -7,7 +7,7 @@ use tracktor::filters::phd::GmPhdFilter;
 use tracktor::utils::{prune_and_merge, PruningConfig, extract_targets, ExtractionConfig};
 
 fn main() {
-    println!("MTT-RS: Multi-Target Tracking Library");
+    println!("Tracktor: Multi-Target Tracking Library");
     println!("======================================\n");
 
     // Create models

@@ -1,4 +1,4 @@
-# MTT-RS: Multi-Target Tracking Library for Rust
+# Tracktor: Multi-Target Tracking Library for Rust
 
 ## Design Document v0.1
 
@@ -51,7 +51,7 @@ Filter phases (predicted vs. updated) are encoded in the type system. The compil
 ## 3. Architecture Overview
 
 ```
-mtt-rs/
+tracktor/
 ├── core/
 │   ├── spaces.rs       # Vector space markers and typed vectors
 │   ├── transforms.rs   # Typed matrices for space transformations
@@ -341,7 +341,7 @@ The type system catches:
 Fallible operations return `Result`:
 
 ```rust
-pub enum MttError {
+pub enum TracktorError {
     SingularMatrix,
     NumericalInstability,
     MaxComponentsExceeded,
@@ -358,7 +358,7 @@ Panics are reserved for internal invariant violations (bugs), never for user inp
 ## 10. Example Usage
 
 ```rust
-use mtt_rs::prelude::*;
+use tracktor::prelude::*;
 
 // Define models
 let transition = ConstantVelocity2D::new(process_noise);
