@@ -54,12 +54,24 @@ Full `no_std` support with optional `alloc` - deploy on resource-constrained pla
 
 ## Features
 
-- **GM-PHD Filter**: Complete Gaussian Mixture Probability Hypothesis Density filter implementation based on Vo & Ma (2006)
+### Multi-Target Filters
+- **GM-PHD Filter**: Gaussian Mixture Probability Hypothesis Density filter based on Vo & Ma (2006)
+- **LMB Filter**: Labeled Multi-Bernoulli filter with track label preservation
+- **LMBM Filter**: Labeled Multi-Bernoulli Mixture for multi-hypothesis tracking
+- **Multi-Sensor LMB**: AA-LMB, GA-LMB, PU-LMB, IC-LMB variants for sensor fusion
+
+### Single-Target Filters
+- **Kalman Filter**: Standard discrete-time linear Kalman filter
+- **Extended Kalman Filter (EKF)**: Nonlinear filter with Jacobian linearization
+- **Unscented Kalman Filter (UKF)**: Sigma-point filter for highly nonlinear systems
+
+### Core Capabilities
 - **Pluggable Models**: Trait-based transition, observation, clutter, and birth models
 - **Numerical Stability**: Joseph form covariance updates with singular matrix detection
 - **Mixture Management**: Intelligent pruning and merging to maintain tractable component counts
-- **State Extraction**: Multiple strategies (threshold, top-N, local maxima) for target estimation
+- **State Extraction**: Multiple strategies (threshold, top-N, expected count, local maxima)
 - **Assignment Solver**: Hungarian algorithm for optimal track-to-measurement association
+- **Embedded-Ready**: Full `no_std` support with optional `alloc`
 
 ## Quick Start
 
@@ -105,21 +117,31 @@ fn main() {
 ## Models
 
 ### Transition Models
-- `ConstantVelocity2D` - Nearly constant velocity with white noise acceleration
+- `ConstantVelocity2D` - 4D state [x, y, vx, vy] with white noise acceleration
+- `ConstantVelocity3D` - 6D state [x, y, z, vx, vy, vz] for 3D tracking
+- `CoordinatedTurn2D` - 5D state [x, y, vx, vy, omega] with turn rate (nonlinear)
 
 ### Observation Models
-- `PositionSensor2D` - Observes position from position-velocity state
+- `PositionSensor2D` - Observes [x, y] from 4D position-velocity state
 - `PositionSensor2DAsym` - Asymmetric noise in x/y directions
+- `PositionSensor3D` - Observes [x, y, z] from 6D state
+- `RangeBearingSensor` - Nonlinear range-bearing for 4D state
+- `RangeBearingSensor5D` - Range-bearing for 5D coordinated turn model
 
 ### Clutter Models
-- `UniformClutter2D` - Uniform Poisson clutter in rectangular region
+- `UniformClutter` - Uniform Poisson clutter over rectangular surveillance region (generic over dimensions)
 
 ### Birth Models
-- `FixedBirthModel` - Predefined birth locations with configurable weights
+- `FixedBirthModel` - Predefined birth locations with configurable weights and covariances
 
 ## State Extraction
 
 Multiple strategies for extracting target estimates from the mixture:
+
+- **Weight Threshold**: Extract components exceeding a weight threshold
+- **Top-N**: Extract N highest-weighted components
+- **Expected Count**: Extract based on rounded total weight
+- **Local Maxima**: Extract local maxima with Mahalanobis distance-based suppression
 
 ```rust
 let config = ExtractionConfig::default()
