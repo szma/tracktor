@@ -64,42 +64,41 @@ Full `no_std` support with optional `alloc` - deploy on resource-constrained pla
 ## Quick Start
 
 ```rust
-use tracktor::{
-    filters::phd::PhdFilterState,
-    models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D, FixedBirthModel},
-    types::{GaussianMixture, GaussianState, Measurement, StateVector},
-    utils::{ExtractionConfig, prune_and_merge},
-};
+use tracktor::prelude::*;
 
-// Define models
-let dt = 1.0;
-let transition = ConstantVelocity2D::new(dt, 0.95, 1.0);
-let observation = PositionSensor2D::new(0.98, 10.0);
-let clutter = UniformClutter2D::new(10.0, 0.0, 100.0, 0.0, 100.0);
+fn main() {
+    // Define models
+    let dt = 1.0;
+    let transition = ConstantVelocity2D::new(1.0, 0.95);  // (noise_diff_coeff, p_survival)
+    let observation = PositionSensor2D::new(10.0, 0.98);  // (noise_variance, p_detection)
+    let clutter = UniformClutter2D::new(10.0, (0.0, 100.0), (0.0, 100.0));
+    let birth = FixedBirthModel::<f64, 4>::new();  // Empty birth model
 
-// Initialize filter with known targets
-let mut mixture = GaussianMixture::new();
-mixture.push(GaussianState::new(
-    0.8,
-    StateVector::from_vec(vec![25.0, 25.0, 1.0, 0.5]),
-    /* covariance */
-));
+    // Initialize filter with known targets
+    let mut mixture = GaussianMixture::new();
+    mixture.push(GaussianState::new(
+        0.8,
+        StateVector::from_array([25.0, 25.0, 1.0, 0.5]),
+        StateCovariance::identity().scale(10.0),
+    ));
 
-let filter = PhdFilterState::new(mixture);
+    let filter = PhdFilterState::from_mixture(mixture);
 
-// Predict-update cycle
-let predicted = filter.predict(&transition);
-let measurements = vec![Measurement::from_vec(vec![26.1, 25.4])];
-let updated = predicted.update(&observation, &clutter, &measurements);
+    // Predict-update cycle
+    let predicted = filter.predict(&transition, &birth, dt);
+    let measurements = [Measurement::from_array([26.1, 25.4])];
+    let updated = predicted.update(&measurements, &observation, &clutter);
 
-// Prune, merge, and extract targets
-let pruned = prune_and_merge(updated.mixture(), 1e-5, 4.0, 100);
-let targets = ExtractionConfig::default().extract(&pruned);
+    // Prune, merge, and extract targets
+    let config = PruningConfig::default_config();
+    let pruned = prune_and_merge(&updated.mixture, &config);
+    let targets = extract_targets(&pruned, &ExtractionConfig::weight_threshold(0.5));
 
-println!("Expected targets: {:.2}", pruned.expected_target_count());
-for target in targets {
-    println!("Target at ({:.1}, {:.1}) with confidence {:.2}",
-        target.state[0], target.state[1], target.confidence);
+    println!("Expected targets: {:.2}", pruned.total_weight());
+    for target in targets {
+        println!("Target at ({:.1}, {:.1}) with confidence {:.2}",
+            *target.state.index(0), *target.state.index(1), target.confidence);
+    }
 }
 ```
 
@@ -137,4 +136,4 @@ Based on the seminal work:
 
 ## License
 
-Licensed under either of Apache License, Version 2.0 or MIT license at your option.
+Licensed under either of AGPL3.0 or commercial license (contact me)
