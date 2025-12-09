@@ -1,10 +1,12 @@
 [package]
 name = "tracktor"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "Multi-target tracking with random finite sets"
 repository = "https://github.com/szma/tracktor"
+keywords = ["math", "simulation", "tracking", "kalman", "random finite sets"]
+categories = ["science", "mathematics","algorithms", "no_std"]
 
 [features]
 default = ["std"]
