@@ -19,6 +19,9 @@
 //! Vo, B.-T., & Vo, B.-N. (2013). "Labeled Random Finite Sets and
 //! Multi-Object Conjugate Priors"
 
+#![allow(clippy::assign_op_pattern)]
+#![allow(clippy::type_complexity)]
+
 use core::marker::PhantomData;
 use nalgebra::{ComplexField, RealField};
 use num_traits::Float;
@@ -92,6 +95,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
     }
 
     /// Creates an Updated state from components (for internal use).
+    #[allow(dead_code)]
     pub(crate) fn from_components(
         density: GlmbDensity<T, N>,
         label_gen: LabelGenerator,
@@ -145,6 +149,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
     /// - `truncation`: Truncation configuration
     /// - `k_best`: Number of best assignments to generate per hypothesis group
     /// - `dt`: Time step
+    #[allow(clippy::too_many_arguments)]
     pub fn joint_predict_and_update<const M: usize, Trans, Obs, Clutter, Birth>(
         mut self,
         measurements: &[Measurement<T, M>],
@@ -319,7 +324,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
 
             hypothesis_groups
                 .entry(track_labels)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push((hyp_idx, adjusted_log_weight));
         }
 
@@ -629,6 +634,7 @@ impl<T: RealField + Float + Copy, const N: usize> Default for GlmbFilterState<T,
 #[cfg(feature = "alloc")]
 impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicted> {
     /// Creates a Predicted state from components (for internal use).
+    #[allow(dead_code)]
     pub(crate) fn from_components(
         density: GlmbDensity<T, N>,
         label_gen: LabelGenerator,
@@ -823,6 +829,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicte
 
 /// Generates new hypotheses from a single input hypothesis using Murty's algorithm.
 #[cfg(feature = "alloc")]
+#[allow(clippy::too_many_arguments)]
 fn generate_hypotheses_from_assignment<
     T: RealField + Float + Copy,
     const N: usize,
@@ -1034,20 +1041,17 @@ fn generate_hypotheses_from_assignment<
                             log_weight_delta + ComplexField::ln(p_d * *likelihood / kappa);
                     }
                 }
+            } else if *is_birth {
+                // Miss column - Birth track NOT born - don't add to output
+                log_weight_delta = log_weight_delta
+                    + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
             } else {
-                // Miss column
-                if *is_birth {
-                    // Birth track NOT born - don't add to output
-                    log_weight_delta = log_weight_delta
-                        + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
-                } else {
-                    // Existing track missed
-                    output_tracks.push(track.clone());
-                    associations.push(None);
+                // Miss column - Existing track missed
+                output_tracks.push(track.clone());
+                associations.push(None);
 
-                    log_weight_delta = log_weight_delta
-                        + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
-                }
+                log_weight_delta = log_weight_delta
+                    + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
             }
         }
 
@@ -1088,6 +1092,7 @@ fn generate_hypotheses_from_assignment<
 
 /// Generates new hypotheses using EKF-style linearization for nonlinear sensors.
 #[cfg(feature = "alloc")]
+#[allow(clippy::too_many_arguments)]
 fn generate_hypotheses_ekf<
     T: RealField + Float + Copy,
     const N: usize,
@@ -1295,17 +1300,15 @@ fn generate_hypotheses_ekf<
                             log_weight_delta + ComplexField::ln(p_d * *likelihood / kappa);
                     }
                 }
+            } else if *is_birth {
+                log_weight_delta = log_weight_delta
+                    + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
             } else {
-                if *is_birth {
-                    log_weight_delta = log_weight_delta
-                        + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
-                } else {
-                    output_tracks.push(track.clone());
-                    associations.push(None);
+                output_tracks.push(track.clone());
+                associations.push(None);
 
-                    log_weight_delta = log_weight_delta
-                        + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
-                }
+                log_weight_delta = log_weight_delta
+                    + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
             }
         }
 

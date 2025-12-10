@@ -6,6 +6,8 @@
 //! multi-target distribution as a mixture of hypotheses, where each hypothesis
 //! specifies which tracks exist and their states.
 
+#![allow(clippy::assign_op_pattern)]
+
 use core::marker::PhantomData;
 use nalgebra::RealField;
 use num_traits::Float;
