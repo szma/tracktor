@@ -24,10 +24,10 @@ use super::cardinality::map_cardinality_estimate;
 use super::types::{LmbTrack, LmbTrackSet, PosteriorGrid};
 #[allow(unused_imports)]
 use super::updaters::TrackUpdater;
-use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
+use crate::types::phase::{Predicted, UpdateStats, Updated};
 use crate::types::spaces::{ComputeInnovation, Measurement, StateCovariance, StateVector};
 use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gain, joseph_update};
 
@@ -472,14 +472,14 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             // Detection components (one for each measurement)
             for j in 0..n_meas {
                 let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
-                if det_weight > T::from(1e-10).unwrap() {
-                    if let Some((mean, cov, _)) = posteriors.get(i, j) {
-                        new_components.push(GaussianState {
-                            weight: det_weight,
-                            mean: *mean,
-                            covariance: *cov,
-                        });
-                    }
+                if det_weight > T::from(1e-10).unwrap()
+                    && let Some((mean, cov, _)) = posteriors.get(i, j)
+                {
+                    new_components.push(GaussianState {
+                        weight: det_weight,
+                        mean: *mean,
+                        covariance: *cov,
+                    });
                 }
             }
 
@@ -738,14 +738,14 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             // Detection components (one for each measurement)
             for j in 0..n_meas {
                 let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
-                if det_weight > T::from(1e-10).unwrap() {
-                    if let Some((mean, cov, _)) = posteriors.get(i, j) {
-                        new_components.push(GaussianState {
-                            weight: det_weight,
-                            mean: *mean,
-                            covariance: *cov,
-                        });
-                    }
+                if det_weight > T::from(1e-10).unwrap()
+                    && let Some((mean, cov, _)) = posteriors.get(i, j)
+                {
+                    new_components.push(GaussianState {
+                        weight: det_weight,
+                        mean: *mean,
+                        covariance: *cov,
+                    });
                 }
             }
 

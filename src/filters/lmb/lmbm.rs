@@ -22,10 +22,10 @@ use alloc::vec::Vec;
 
 use super::filter::LabeledBirthModel;
 use super::types::{LmbmHypothesis, LmbmState, PosteriorGrid};
-use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
+use crate::types::phase::{Predicted, UpdateStats, Updated};
 use crate::types::spaces::{ComputeInnovation, Measurement, StateVector};
 use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gain, joseph_update};
 

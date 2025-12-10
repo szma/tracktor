@@ -268,11 +268,10 @@ pub fn hungarian_gated(
 
     // Filter out assignments above threshold
     for i in 0..result.mapping.len() {
-        if let Some(j) = result.mapping[i] {
-            if cost.get(i, j) > gate_threshold {
+        if let Some(j) = result.mapping[i]
+            && cost.get(i, j) > gate_threshold {
                 result.mapping[i] = None;
             }
-        }
     }
 
     // Recalculate cost

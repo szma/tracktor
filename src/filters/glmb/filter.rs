@@ -30,10 +30,10 @@ use alloc::vec::Vec;
 
 use super::types::{GlmbDensity, GlmbHypothesis, GlmbTrack, GlmbTruncationConfig};
 use crate::filters::lmb::LabeledBirthModel;
-use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{Label, LabelGenerator};
+use crate::types::phase::{Predicted, UpdateStats, Updated};
 use crate::types::spaces::{ComputeInnovation, Measurement, StateCovariance, StateVector};
 use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gain, joseph_update};
 
