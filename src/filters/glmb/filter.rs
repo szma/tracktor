@@ -467,9 +467,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                                 };
 
                                 log_weight_delta +=
-                                    ComplexField::ln(
-                                        weight_contrib + T::from_f64(1e-300).unwrap(),
-                                    );
+                                    ComplexField::ln(weight_contrib + T::from_f64(1e-300).unwrap());
 
                                 output_tracks.push(GlmbTrack {
                                     label: track.label,
@@ -485,16 +483,13 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                             // Miss detection
                             if *is_birth {
                                 // Birth track not instantiated - skip
-                                log_weight_delta +=
-                                    ComplexField::ln(
-                                        T::one() - *r_birth + T::from_f64(1e-300).unwrap(),
-                                    );
+                                log_weight_delta += ComplexField::ln(
+                                    T::one() - *r_birth + T::from_f64(1e-300).unwrap(),
+                                );
                             } else {
                                 // Existing track missed
                                 log_weight_delta +=
-                                    ComplexField::ln(
-                                        T::one() - p_d + T::from_f64(1e-300).unwrap(),
-                                    );
+                                    ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
 
                                 output_tracks.push(track.clone());
                                 associations.push(None);
@@ -1033,8 +1028,7 @@ fn generate_hypotheses_from_assignment<
                     // Weight contribution
                     let kappa = clutter_model.clutter_intensity(&measurements[col]);
                     if *is_birth {
-                        log_weight_delta +=
-                            ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
+                        log_weight_delta += ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
                     } else {
                         log_weight_delta += ComplexField::ln(p_d * *likelihood / kappa);
                     }
@@ -1048,8 +1042,7 @@ fn generate_hypotheses_from_assignment<
                 output_tracks.push(track.clone());
                 associations.push(None);
 
-                log_weight_delta +=
-                    ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
+                log_weight_delta += ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
             }
         }
 
@@ -1070,8 +1063,7 @@ fn generate_hypotheses_from_assignment<
         let mut log_weight_delta = T::zero();
 
         for p_d in detection_probs.iter().take(n_existing) {
-            log_weight_delta +=
-                ComplexField::ln(T::one() - *p_d + T::from_f64(1e-300).unwrap());
+            log_weight_delta += ComplexField::ln(T::one() - *p_d + T::from_f64(1e-300).unwrap());
         }
 
         result.push(GlmbHypothesis {
@@ -1291,8 +1283,7 @@ fn generate_hypotheses_ekf<
 
                     let kappa = clutter_model.clutter_intensity(&measurements[col]);
                     if *is_birth {
-                        log_weight_delta +=
-                            ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
+                        log_weight_delta += ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
                     } else {
                         log_weight_delta += ComplexField::ln(p_d * *likelihood / kappa);
                     }
@@ -1304,8 +1295,7 @@ fn generate_hypotheses_ekf<
                 output_tracks.push(track.clone());
                 associations.push(None);
 
-                log_weight_delta +=
-                    ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
+                log_weight_delta += ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
             }
         }
 
@@ -1325,8 +1315,7 @@ fn generate_hypotheses_ekf<
         let mut log_weight_delta = T::zero();
 
         for p_d in detection_probs.iter().take(n_existing) {
-            log_weight_delta +=
-                ComplexField::ln(T::one() - *p_d + T::from_f64(1e-300).unwrap());
+            log_weight_delta += ComplexField::ln(T::one() - *p_d + T::from_f64(1e-300).unwrap());
         }
 
         result.push(GlmbHypothesis {

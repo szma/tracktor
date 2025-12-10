@@ -14,7 +14,6 @@
 //! Converting GLMB to LMB computes the marginal existence and state for each
 //! label, losing correlation information.
 
-
 use nalgebra::{ComplexField, RealField};
 use num_traits::Float;
 
