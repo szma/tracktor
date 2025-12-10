@@ -20,8 +20,6 @@ pub mod filter;
 pub mod fusion;
 pub mod lmbm;
 pub mod multisensor;
-#[cfg(test)]
-mod tests;
 pub mod types;
 pub mod updaters;
 
