@@ -2,6 +2,16 @@
 //!
 //! Implementation of the Labeled Multi-Bernoulli filter for multi-target
 //! tracking with track identity preservation.
+//!
+//! # References
+//!
+//! - Reuter, S., Vo, B.-T., Vo, B.-N., & Dietmayer, K. (2014). "The Labeled
+//!   Multi-Bernoulli Filter." *IEEE Transactions on Signal Processing*, 62(12),
+//!   3246-3260.
+//!
+//! - Vo, B.-T., & Vo, B.-N. (2013). "Labeled Random Finite Sets and Multi-Object
+//!   Conjugate Priors." *IEEE Transactions on Signal Processing*, 61(13),
+//!   3460-3475.
 
 use core::marker::PhantomData;
 use nalgebra::{ComplexField, RealField};

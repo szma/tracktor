@@ -17,7 +17,7 @@ let measurement: Measurement<f64, 2> = /* ... */;
 // let wrong = state + measurement;  // Error!
 
 // Matrices encode their transformations
-let H: ObservationMatrix<f64, 2, 4> = /* ... */;  // Maps 4D state → 2D measurement
+let H: ObservationMatrix<f64, 2, 4> = /* ... */;  // Maps 4D state -> 2D measurement
 let measurement = H.observe(&state);               // Correct by construction
 ```
 
@@ -55,22 +55,30 @@ Full `no_std` support with optional `alloc` - deploy on resource-constrained pla
 ## Features
 
 ### Multi-Target Filters
-- **GM-PHD Filter**: Gaussian Mixture Probability Hypothesis Density filter based on Vo & Ma (2006)
-- **LMB Filter**: Labeled Multi-Bernoulli filter with track label preservation
-- **LMBM Filter**: Labeled Multi-Bernoulli Mixture for multi-hypothesis tracking
-- **Multi-Sensor LMB**: AA-LMB, GA-LMB, PU-LMB, IC-LMB variants for sensor fusion
+
+| Filter | Track Identity | Multi-Hypothesis | Multi-Sensor | Description |
+|--------|---------------|------------------|--------------|-------------|
+| **GM-PHD** | No | No | No | Gaussian Mixture PHD - fast, scalable |
+| **LMB** | Yes | Implicit | Yes | Labeled Multi-Bernoulli with track continuity |
+| **LMBM** | Yes | Explicit | Yes | LMB Mixture for ambiguous scenarios |
+| **GLMB** | Yes | Explicit | Yes | Full joint hypothesis, most accurate |
 
 ### Single-Target Filters
-- **Kalman Filter**: Standard discrete-time linear Kalman filter
-- **Extended Kalman Filter (EKF)**: Nonlinear filter with Jacobian linearization
-- **Unscented Kalman Filter (UKF)**: Sigma-point filter for highly nonlinear systems
+
+| Filter | Dynamics | Jacobian Required | Description |
+|--------|----------|-------------------|-------------|
+| **Kalman** | Linear | No | Standard discrete-time Kalman filter |
+| **EKF** | Nonlinear | Yes | Extended Kalman with Jacobian linearization |
+| **UKF** | Nonlinear | No | Unscented transform, no Jacobians needed |
 
 ### Core Capabilities
+
 - **Pluggable Models**: Trait-based transition, observation, clutter, and birth models
 - **Numerical Stability**: Joseph form covariance updates with singular matrix detection
 - **Mixture Management**: Intelligent pruning and merging to maintain tractable component counts
 - **State Extraction**: Multiple strategies (threshold, top-N, expected count, local maxima)
-- **Assignment Solver**: Hungarian algorithm for optimal track-to-measurement association
+- **Data Association**: Loopy Belief Propagation (LBP) and Hungarian algorithm
+- **Multi-Sensor Fusion**: AA-LMB, GA-LMB, PU-LMB, IC-LMB fusion strategies
 - **Embedded-Ready**: Full `no_std` support with optional `alloc`
 
 ## Quick Start
@@ -117,22 +125,60 @@ fn main() {
 ## Models
 
 ### Transition Models
-- `ConstantVelocity2D` - 4D state [x, y, vx, vy] with white noise acceleration
-- `ConstantVelocity3D` - 6D state [x, y, z, vx, vy, vz] for 3D tracking
-- `CoordinatedTurn2D` - 5D state [x, y, vx, vy, omega] with turn rate (nonlinear)
+
+| Model | State Dim | Description |
+|-------|-----------|-------------|
+| `ConstantVelocity2D` | 4 | [x, y, vx, vy] with white noise acceleration |
+| `ConstantVelocity3D` | 6 | [x, y, z, vx, vy, vz] for 3D tracking |
+| `CoordinatedTurn2D` | 5 | [x, y, vx, vy, omega] nonlinear turn model (use with EKF/UKF) |
 
 ### Observation Models
-- `PositionSensor2D` - Observes [x, y] from 4D position-velocity state
-- `PositionSensor2DAsym` - Asymmetric noise in x/y directions
-- `PositionSensor3D` - Observes [x, y, z] from 6D state
-- `RangeBearingSensor` - Nonlinear range-bearing for 4D state
-- `RangeBearingSensor5D` - Range-bearing for 5D coordinated turn model
+
+| Model | State -> Meas | Description |
+|-------|---------------|-------------|
+| `PositionSensor2D` | 4D -> 2D | Observes [x, y] from position-velocity state |
+| `PositionSensor2DAsym` | 4D -> 2D | Asymmetric noise in x/y directions |
+| `PositionSensor3D` | 6D -> 3D | Observes [x, y, z] from 6D state |
+| `RangeBearingSensor` | 4D -> 2D | Nonlinear range-bearing (use with EKF/UKF) |
+| `RangeBearingSensor5D` | 5D -> 2D | Range-bearing for coordinated turn model |
 
 ### Clutter Models
-- `UniformClutter` - Uniform Poisson clutter over rectangular surveillance region (generic over dimensions)
+
+| Model | Description |
+|-------|-------------|
+| `UniformClutter` | Generic uniform Poisson clutter over rectangular region |
+| `UniformClutter2D` | 2D rectangular surveillance region |
+| `UniformClutter3D` | 3D rectangular surveillance region |
+| `UniformClutterRangeBearing` | Polar coordinates (range-bearing space) |
+| `GaussianClutter` | Gaussian-shaped clutter density |
 
 ### Birth Models
-- `FixedBirthModel` - Predefined birth locations with configurable weights and covariances
+
+| Model | Description |
+|-------|-------------|
+| `FixedBirthModel` | Predefined birth locations with configurable weights |
+| `UniformBirthModel2D` | Grid of birth components over rectangular region |
+| `AdaptiveBirthModel` | Creates birth components from unassociated measurements |
+| `NoBirthModel` | No spontaneous births (for labeled filters) |
+
+## Multi-Sensor Fusion
+
+The LMB filter supports multiple fusion strategies for combining tracks from different sensors:
+
+| Strategy | Method | Best For |
+|----------|--------|----------|
+| **AA-LMB** | Arithmetic Average | Fast, simple fusion |
+| **GA-LMB** | Geometric Average (Covariance Intersection) | Correlated sensor noise |
+| **PU-LMB** | Parallel Update (Information Filter) | Independent sensors |
+| **IC-LMB** | Iterated Corrector | Maximum accuracy |
+
+```rust
+use tracktor::filters::lmb::{MultisensorLmbFilter, SensorConfig};
+use tracktor::filters::lmb::fusion::GeometricAverageMerger;
+
+let merger = GeometricAverageMerger::default();
+let filter = MultisensorLmbFilter::new(transition, vec![sensor1, sensor2], merger);
+```
 
 ## State Extraction
 
@@ -151,11 +197,43 @@ let config = ExtractionConfig::default()
 let targets = config.extract(&mixture);
 ```
 
+## Examples
+
+The `examples/` directory contains complete working examples:
+
+| Example | Description |
+|---------|-------------|
+| `basic_tracking.rs` | Simple PHD filter introduction |
+| `advanced_tracking.rs` | Vo & Ma benchmark scenario |
+| `lmb_tracking.rs` | LMB filter with track identity |
+| `lmbm_tracking.rs` | Multi-hypothesis tracking |
+| `glmb_tracking.rs` | Full GLMB with hypothesis extraction |
+| `lmb_multisensor.rs` | Multi-sensor fusion comparison |
+| `measurement_driven_birth.rs` | Adaptive birth from measurements |
+
+Run examples with:
+```bash
+cargo run --example basic_tracking
+```
+
 ## References
 
-Based on the seminal work:
-- B.-N. Vo and W.-K. Ma, "The Gaussian Mixture Probability Hypothesis Density Filter," *IEEE Transactions on Signal Processing*, vol. 54, no. 11, pp. 4091-4104, Nov. 2006.
+### Multi-Target Filters
+
+- **GM-PHD Filter**: Vo, B.-N., & Ma, W.-K. (2006). "The Gaussian Mixture Probability Hypothesis Density Filter." *IEEE Transactions on Signal Processing*, 54(11), 4091-4104.
+
+- **LMB/GLMB Filters**: Vo, B.-T., & Vo, B.-N. (2013). "Labeled Random Finite Sets and Multi-Object Conjugate Priors." *IEEE Transactions on Signal Processing*, 61(13), 3460-3475.
+
+- **LMB Filter**: Reuter, S., Vo, B.-T., Vo, B.-N., & Dietmayer, K. (2014). "The Labeled Multi-Bernoulli Filter." *IEEE Transactions on Signal Processing*, 62(12), 3246-3260.
+
+### Single-Target Filters
+
+- **Kalman Filter**: Kalman, R. E. (1960). "A New Approach to Linear Filtering and Prediction Problems." *Journal of Basic Engineering*, 82(1), 35-45.
+
+- **Extended Kalman Filter**: Smith, G. L., Schmidt, S. F., & McGee, L. A. (1962). "Application of Statistical Filter Theory to the Optimal Estimation of Position and Velocity on Board a Circumlunar Vehicle." NASA Technical Report TR R-135.
+
+- **Unscented Kalman Filter**: Julier, S. J., & Uhlmann, J. K. (1997). "A New Extension of the Kalman Filter to Nonlinear Systems." *Proc. SPIE 3068, Signal Processing, Sensor Fusion, and Target Recognition VI*.
 
 ## License
 
-Licensed under either of AGPL3.0 or commercial license (contact me)
+Licensed under either of AGPL-3.0 or commercial license (contact me).

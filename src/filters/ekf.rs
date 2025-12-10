@@ -3,6 +3,12 @@
 //! The EKF extends the standard Kalman filter to handle nonlinear transition
 //! and/or observation models by linearizing them around the current state estimate.
 //!
+//! # Reference
+//!
+//! Smith, G. L., Schmidt, S. F., & McGee, L. A. (1962). "Application of
+//! Statistical Filter Theory to the Optimal Estimation of Position and Velocity
+//! on Board a Circumlunar Vehicle." NASA Technical Report TR R-135.
+//!
 //! # Type Safety
 //!
 //! The filter uses phantom types and const generics to ensure:

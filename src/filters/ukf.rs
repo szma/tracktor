@@ -4,6 +4,12 @@
 //! nonlinear functions without requiring Jacobian computation. This makes it more
 //! accurate than the EKF for highly nonlinear systems.
 //!
+//! # Reference
+//!
+//! Julier, S. J., & Uhlmann, J. K. (1997). "A New Extension of the Kalman Filter
+//! to Nonlinear Systems." *Proc. SPIE 3068, Signal Processing, Sensor Fusion,
+//! and Target Recognition VI*.
+//!
 //! # Algorithm
 //!
 //! The UKF uses a set of carefully chosen sample points (sigma points) that capture
