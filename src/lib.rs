@@ -25,10 +25,9 @@ pub mod prelude {
     pub use crate::filters::glmb::{
         extract_best_hypothesis as glmb_extract_best_hypothesis,
         extract_map_cardinality as glmb_extract_map_cardinality,
-        extract_marginal_states as glmb_extract_marginal_states, glmb_to_lmb,
-        glmb_to_lmb_merged, lmb_to_glmb, lmb_to_glmb_full, FixedGlmbTrack, GlmbDensity,
-        GlmbEstimate, GlmbFilter, GlmbFilterState, GlmbHypothesis, GlmbTrack,
-        GlmbTruncationConfig,
+        extract_marginal_states as glmb_extract_marginal_states, glmb_to_lmb, glmb_to_lmb_merged,
+        lmb_to_glmb, lmb_to_glmb_full, FixedGlmbTrack, GlmbDensity, GlmbEstimate, GlmbFilter,
+        GlmbFilterState, GlmbHypothesis, GlmbTrack, GlmbTruncationConfig,
     };
     pub use crate::filters::kalman::*;
     #[cfg(feature = "alloc")]
