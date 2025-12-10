@@ -117,9 +117,10 @@ impl<T: RealField + Copy, const N: usize> PhdFilterState<T, N, Updated> {
         let transition_matrix = transition_model.transition_matrix(dt);
         let process_noise = transition_model.process_noise(dt);
 
-        let mut predicted = GaussianMixture::with_capacity(
-            self.mixture.len() + birth_model.birth_components().len(),
-        );
+        let birth_components = birth_model.birth_components_vec();
+
+        let mut predicted =
+            GaussianMixture::with_capacity(self.mixture.len() + birth_components.len());
 
         // Predict surviving components
         for component in self.mixture.iter() {
@@ -137,8 +138,8 @@ impl<T: RealField + Copy, const N: usize> PhdFilterState<T, N, Updated> {
         }
 
         // Add birth components
-        for birth_component in birth_model.birth_components() {
-            predicted.push(birth_component.clone());
+        for birth_component in birth_components {
+            predicted.push(birth_component);
         }
 
         PhdFilterState {
