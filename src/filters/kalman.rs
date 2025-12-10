@@ -3,6 +3,11 @@
 //! A type-safe implementation of the discrete-time Kalman filter that leverages
 //! the library's compile-time dimension and space checking.
 //!
+//! # Reference
+//!
+//! Kalman, R. E. (1960). "A New Approach to Linear Filtering and Prediction
+//! Problems." *Journal of Basic Engineering*, 82(1), 35-45.
+//!
 //! # Type Safety
 //!
 //! The filter uses phantom types to ensure:
