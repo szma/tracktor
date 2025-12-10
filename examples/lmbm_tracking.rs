@@ -4,7 +4,7 @@
 //! multiple data association hypotheses weighted by probability.
 
 use tracktor::filters::lmb::{
-    extract_best_hypothesis, extract_lmbm_estimates, LabeledBirthModel, LmbmFilter,
+    LabeledBirthModel, LmbmFilter, extract_best_hypothesis, extract_lmbm_estimates,
 };
 use tracktor::prelude::*;
 

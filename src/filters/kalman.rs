@@ -51,8 +51,8 @@ use crate::types::spaces::{
     ComputeInnovation, Measurement, MeasurementCovariance, StateCovariance, StateVector,
 };
 use crate::types::transforms::{
-    compute_innovation_covariance, compute_kalman_gain, joseph_update, ObservationMatrix,
-    TransitionMatrix,
+    ObservationMatrix, TransitionMatrix, compute_innovation_covariance, compute_kalman_gain,
+    joseph_update,
 };
 
 // ============================================================================

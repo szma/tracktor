@@ -12,8 +12,8 @@ use alloc::vec::Vec;
 
 use super::spaces::{Measurement, MeasurementCovariance, StateCovariance, StateVector};
 use super::transforms::{
-    compute_innovation_covariance, compute_kalman_gain, joseph_update, ObservationMatrix,
-    TransitionMatrix,
+    ObservationMatrix, TransitionMatrix, compute_innovation_covariance, compute_kalman_gain,
+    joseph_update,
 };
 
 // ============================================================================

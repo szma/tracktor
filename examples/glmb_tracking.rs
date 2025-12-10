@@ -9,7 +9,7 @@
 //! cannot be captured by simpler filters like LMB.
 
 use tracktor::filters::glmb::{
-    extract_best_hypothesis, extract_marginal_states, GlmbFilter, GlmbTruncationConfig,
+    GlmbFilter, GlmbTruncationConfig, extract_best_hypothesis, extract_marginal_states,
 };
 use tracktor::filters::lmb::{LabeledBirthModel, NoBirthModel};
 use tracktor::prelude::*;
