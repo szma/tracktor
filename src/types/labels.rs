@@ -220,16 +220,16 @@ mod tests {
 
     #[test]
     fn test_label_generation() {
-        let mut gen = LabelGenerator::new();
+        let mut generator = LabelGenerator::new();
 
-        let l1 = gen.next_label();
-        let l2 = gen.next_label();
+        let l1 = generator.next_label();
+        let l2 = generator.next_label();
 
         assert_eq!(l1, Label::new(0, 0));
         assert_eq!(l2, Label::new(0, 1));
 
-        gen.advance_time();
-        let l3 = gen.next_label();
+        generator.advance_time();
+        let l3 = generator.next_label();
 
         assert_eq!(l3, Label::new(1, 0));
     }
