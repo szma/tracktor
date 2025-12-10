@@ -13,7 +13,7 @@ use num_traits::Float;
 use alloc::vec::Vec;
 
 use crate::models::{BirthModel, ClutterModel, ObservationModel, TransitionModel};
-use crate::types::gaussian::{innovation_likelihood, GaussianMixture, GaussianState};
+use crate::types::gaussian::{GaussianMixture, GaussianState, innovation_likelihood};
 use crate::types::spaces::{ComputeInnovation, Measurement, StateVector};
 use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gain, joseph_update};
 
@@ -248,7 +248,7 @@ impl<T: RealField + Float + Copy, const N: usize> PhdFilterState<T, N, Predicted
             for (i, component) in self.mixture.iter().enumerate() {
                 let (_, ref predicted_meas, _, ref kalman_gain) = component_data[i];
 
-                if let Some(ref gain) = kalman_gain {
+                if let Some(gain) = kalman_gain {
                     let normalized_weight = detection_weights[i] / weight_sum;
 
                     if normalized_weight > T::zero() {
