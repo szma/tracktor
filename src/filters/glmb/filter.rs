@@ -174,7 +174,9 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
 
         for hypothesis in &self.density.hypotheses {
             for track in &hypothesis.tracks {
-                unique_tracks.entry(track.label).or_insert_with(|| track.clone());
+                unique_tracks
+                    .entry(track.label)
+                    .or_insert_with(|| track.clone());
             }
         }
 
@@ -239,8 +241,11 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             for (j, measurement) in measurements.iter().enumerate() {
                 let predicted_meas = obs_matrix.observe(&track.state.mean);
                 let innovation = measurement.innovation(predicted_meas);
-                let innovation_cov =
-                    compute_innovation_covariance(&track.state.covariance, &obs_matrix, &meas_noise);
+                let innovation_cov = compute_innovation_covariance(
+                    &track.state.covariance,
+                    &obs_matrix,
+                    &meas_noise,
+                );
 
                 let likelihood = crate::types::gaussian::innovation_likelihood(
                     &innovation,
@@ -259,8 +264,12 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                     let updated_mean = StateVector::from_svector(
                         track.state.mean.as_svector() + correction.as_svector(),
                     );
-                    let updated_cov =
-                        joseph_update(&track.state.covariance, &kalman_gain, &obs_matrix, &meas_noise);
+                    let updated_cov = joseph_update(
+                        &track.state.covariance,
+                        &kalman_gain,
+                        &obs_matrix,
+                        &meas_noise,
+                    );
 
                     posteriors[i][j] = Some((updated_mean, updated_cov, likelihood));
                 } else {
@@ -422,8 +431,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             }
 
             // Run Murty's k-best
-            let assignments =
-                crate::assignment::hungarian::murty_k_best(&cost_matrix, k_best);
+            let assignments = crate::assignment::hungarian::murty_k_best(&cost_matrix, k_best);
 
             // Generate hypotheses from assignments for each input hypothesis in this group
             for (_hyp_idx, base_log_weight) in &group {
@@ -455,7 +463,9 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                                 };
 
                                 log_weight_delta = log_weight_delta
-                                    + ComplexField::ln(weight_contrib + T::from_f64(1e-300).unwrap());
+                                    + ComplexField::ln(
+                                        weight_contrib + T::from_f64(1e-300).unwrap(),
+                                    );
 
                                 output_tracks.push(GlmbTrack {
                                     label: track.label,
@@ -472,11 +482,15 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                             if *is_birth {
                                 // Birth track not instantiated - skip
                                 log_weight_delta = log_weight_delta
-                                    + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
+                                    + ComplexField::ln(
+                                        T::one() - *r_birth + T::from_f64(1e-300).unwrap(),
+                                    );
                             } else {
                                 // Existing track missed
                                 log_weight_delta = log_weight_delta
-                                    + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
+                                    + ComplexField::ln(
+                                        T::one() - p_d + T::from_f64(1e-300).unwrap(),
+                                    );
 
                                 output_tracks.push(track.clone());
                                 associations.push(None);
@@ -582,8 +596,8 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             // Update log weight for track deaths
             for _ in &tracks_to_remove {
                 let p_s = T::from_f64(1e-10).unwrap(); // Survival prob was below this
-                hypothesis.log_weight =
-                    hypothesis.log_weight + ComplexField::ln(T::one() - p_s + T::from_f64(1e-300).unwrap());
+                hypothesis.log_weight = hypothesis.log_weight
+                    + ComplexField::ln(T::one() - p_s + T::from_f64(1e-300).unwrap());
             }
 
             // Clear old associations (they belong to previous timestep)
@@ -883,8 +897,10 @@ fn generate_hypotheses_from_assignment<
             let innovation_cov =
                 compute_innovation_covariance(&track.state.covariance, obs_matrix, meas_noise);
 
-            let likelihood =
-                crate::types::gaussian::innovation_likelihood(&innovation, innovation_cov.as_matrix());
+            let likelihood = crate::types::gaussian::innovation_likelihood(
+                &innovation,
+                innovation_cov.as_matrix(),
+            );
 
             if likelihood <= T::zero() {
                 stats.zero_likelihood_count += 1;
@@ -898,8 +914,12 @@ fn generate_hypotheses_from_assignment<
                 let updated_mean = StateVector::from_svector(
                     track.state.mean.as_svector() + correction.as_svector(),
                 );
-                let updated_cov =
-                    joseph_update(&track.state.covariance, &kalman_gain, obs_matrix, meas_noise);
+                let updated_cov = joseph_update(
+                    &track.state.covariance,
+                    &kalman_gain,
+                    obs_matrix,
+                    meas_noise,
+                );
 
                 posteriors[i][j] = Some((updated_mean, updated_cov, likelihood));
             } else {
@@ -958,7 +978,9 @@ fn generate_hypotheses_from_assignment<
             // Existing track missed detection
             let one_minus_pd = T::one() - p_d;
             if one_minus_pd > T::from_f64(1e-300).unwrap() {
-                -ComplexField::ln(one_minus_pd).to_subset().unwrap_or(large_cost)
+                -ComplexField::ln(one_minus_pd)
+                    .to_subset()
+                    .unwrap_or(large_cost)
             } else {
                 large_cost // p_d ≈ 1 means must be detected
             }
@@ -1005,8 +1027,8 @@ fn generate_hypotheses_from_assignment<
                     // Weight contribution
                     let kappa = clutter_model.clutter_intensity(&measurements[col]);
                     if *is_birth {
-                        log_weight_delta =
-                            log_weight_delta + ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
+                        log_weight_delta = log_weight_delta
+                            + ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
                     } else {
                         log_weight_delta =
                             log_weight_delta + ComplexField::ln(p_d * *likelihood / kappa);
@@ -1016,15 +1038,15 @@ fn generate_hypotheses_from_assignment<
                 // Miss column
                 if *is_birth {
                     // Birth track NOT born - don't add to output
-                    log_weight_delta =
-                        log_weight_delta + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
+                    log_weight_delta = log_weight_delta
+                        + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
                 } else {
                     // Existing track missed
                     output_tracks.push(track.clone());
                     associations.push(None);
 
-                    log_weight_delta =
-                        log_weight_delta + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
+                    log_weight_delta = log_weight_delta
+                        + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
                 }
             }
         }
@@ -1147,8 +1169,10 @@ fn generate_hypotheses_ekf<
             let innovation_cov =
                 compute_innovation_covariance(&track.state.covariance, &obs_matrix, meas_noise);
 
-            let likelihood =
-                crate::types::gaussian::innovation_likelihood(&innovation, innovation_cov.as_matrix());
+            let likelihood = crate::types::gaussian::innovation_likelihood(
+                &innovation,
+                innovation_cov.as_matrix(),
+            );
 
             if likelihood <= T::zero() {
                 stats.zero_likelihood_count += 1;
@@ -1162,8 +1186,12 @@ fn generate_hypotheses_ekf<
                 let updated_mean = StateVector::from_svector(
                     track.state.mean.as_svector() + correction.as_svector(),
                 );
-                let updated_cov =
-                    joseph_update(&track.state.covariance, &kalman_gain, &obs_matrix, meas_noise);
+                let updated_cov = joseph_update(
+                    &track.state.covariance,
+                    &kalman_gain,
+                    &obs_matrix,
+                    meas_noise,
+                );
 
                 posteriors[i][j] = Some((updated_mean, updated_cov, likelihood));
             } else {
@@ -1216,7 +1244,9 @@ fn generate_hypotheses_ekf<
         } else {
             let one_minus_pd = T::one() - p_d;
             if one_minus_pd > T::from_f64(1e-300).unwrap() {
-                -ComplexField::ln(one_minus_pd).to_subset().unwrap_or(large_cost)
+                -ComplexField::ln(one_minus_pd)
+                    .to_subset()
+                    .unwrap_or(large_cost)
             } else {
                 large_cost
             }
@@ -1258,8 +1288,8 @@ fn generate_hypotheses_ekf<
 
                     let kappa = clutter_model.clutter_intensity(&measurements[col]);
                     if *is_birth {
-                        log_weight_delta =
-                            log_weight_delta + ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
+                        log_weight_delta = log_weight_delta
+                            + ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
                     } else {
                         log_weight_delta =
                             log_weight_delta + ComplexField::ln(p_d * *likelihood / kappa);
@@ -1267,14 +1297,14 @@ fn generate_hypotheses_ekf<
                 }
             } else {
                 if *is_birth {
-                    log_weight_delta =
-                        log_weight_delta + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
+                    log_weight_delta = log_weight_delta
+                        + ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
                 } else {
                     output_tracks.push(track.clone());
                     associations.push(None);
 
-                    log_weight_delta =
-                        log_weight_delta + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
+                    log_weight_delta = log_weight_delta
+                        + ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
                 }
             }
         }
@@ -1558,10 +1588,7 @@ mod tests {
         let filter_state = GlmbFilterState::from_tracks(vec![track]);
 
         assert_eq!(filter_state.num_hypotheses(), 1);
-        assert_eq!(
-            filter_state.density.hypotheses[0].cardinality(),
-            1
-        );
+        assert_eq!(filter_state.density.hypotheses[0].cardinality(), 1);
     }
 
     #[cfg(feature = "alloc")]

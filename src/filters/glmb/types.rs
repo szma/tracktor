@@ -690,8 +690,14 @@ mod tests {
 
         // label0 exists in both hypotheses: 0.4 + 0.6 = 1.0
         // label1 exists only in h2: 0.6
-        let label0_existence = marginals.iter().find(|(l, _)| *l == label0).map(|(_, r)| *r);
-        let label1_existence = marginals.iter().find(|(l, _)| *l == label1).map(|(_, r)| *r);
+        let label0_existence = marginals
+            .iter()
+            .find(|(l, _)| *l == label0)
+            .map(|(_, r)| *r);
+        let label1_existence = marginals
+            .iter()
+            .find(|(l, _)| *l == label1)
+            .map(|(_, r)| *r);
 
         assert!((label0_existence.unwrap() - 1.0).abs() < 1e-10);
         assert!((label1_existence.unwrap() - 0.6).abs() < 1e-10);

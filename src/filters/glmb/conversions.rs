@@ -343,8 +343,8 @@ pub fn glmb_to_lmb<T: RealField + Float + Copy, const N: usize>(
 pub fn glmb_to_lmb_merged<T: RealField + Float + Copy, const N: usize>(
     density: &GlmbDensity<T, N>,
 ) -> LmbTrackSet<T, N> {
-    use alloc::collections::BTreeMap;
     use crate::types::spaces::StateCovariance;
+    use alloc::collections::BTreeMap;
 
     if density.hypotheses.is_empty() {
         return LmbTrackSet::new();
@@ -369,18 +369,16 @@ pub fn glmb_to_lmb_merged<T: RealField + Float + Copy, const N: usize>(
     }
 
     // Accumulate per-label statistics for moment matching
-    let mut label_data: BTreeMap<
-        Label,
-        (StateVector<T, N>, StateCovariance<T, N>, T),
-    > = BTreeMap::new();
+    let mut label_data: BTreeMap<Label, (StateVector<T, N>, StateCovariance<T, N>, T)> =
+        BTreeMap::new();
 
     for (h, &w) in density.hypotheses.iter().zip(&weights) {
         let norm_w = w / total;
 
         for track in &h.tracks {
-            let entry = label_data.entry(track.label).or_insert_with(|| {
-                (StateVector::zeros(), StateCovariance::zeros(), T::zero())
-            });
+            let entry = label_data
+                .entry(track.label)
+                .or_insert_with(|| (StateVector::zeros(), StateCovariance::zeros(), T::zero()));
 
             // Weighted mean accumulation
             entry.0 = StateVector::from_svector(
@@ -404,7 +402,8 @@ pub fn glmb_to_lmb_merged<T: RealField + Float + Copy, const N: usize>(
         }
 
         // Normalize mean
-        let mean = StateVector::from_svector(weighted_mean.as_svector().scale(T::one() / existence));
+        let mean =
+            StateVector::from_svector(weighted_mean.as_svector().scale(T::one() / existence));
 
         // Compute covariance with spread-of-means correction
         // For simplicity, we use the weighted average covariance

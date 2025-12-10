@@ -25,9 +25,9 @@ impl GlmbBirthModel {
         Self {
             // Birth locations covering the surveillance region
             locations: vec![
-                (0.02, 20.0, 20.0),  // Lower-left region
-                (0.02, 80.0, 80.0),  // Upper-right region
-                (0.02, 50.0, 50.0),  // Center
+                (0.02, 20.0, 20.0), // Lower-left region
+                (0.02, 80.0, 80.0), // Upper-right region
+                (0.02, 50.0, 50.0), // Center
             ],
         }
     }
@@ -48,11 +48,7 @@ impl LabeledBirthModel<f64, 4> for GlmbBirthModel {
                 BernoulliTrack::new(
                     label_gen.next_label(),
                     *existence,
-                    GaussianState::new(
-                        1.0,
-                        StateVector::from_array([*x, *y, 0.0, 0.0]),
-                        cov,
-                    ),
+                    GaussianState::new(1.0, StateVector::from_array([*x, *y, 0.0, 0.0]), cov),
                 )
             })
             .collect()
@@ -83,15 +79,15 @@ fn example_basic_tracking() {
 
     // Create models
     let transition = ConstantVelocity2D::new(1.0, 0.99); // process_noise=1.0, survival=0.99
-    let observation = PositionSensor2D::new(5.0, 0.95);  // meas_noise=5.0, detection=0.95
+    let observation = PositionSensor2D::new(5.0, 0.95); // meas_noise=5.0, detection=0.95
     let clutter = UniformClutter2D::new(2.0, (0.0, 100.0), (0.0, 100.0)); // 2 false alarms avg
     let birth = GlmbBirthModel::new();
 
     // Custom truncation configuration
     let truncation = GlmbTruncationConfig {
-        log_weight_threshold: -15.0,      // Prune hypotheses with log_weight < -15
-        max_hypotheses: 100,              // Keep at most 100 hypotheses
-        max_per_cardinality: Some(20),    // Keep at most 20 per cardinality
+        log_weight_threshold: -15.0,   // Prune hypotheses with log_weight < -15
+        max_hypotheses: 100,           // Keep at most 100 hypotheses
+        max_per_cardinality: Some(20), // Keep at most 20 per cardinality
     };
 
     // Create filter with k_best=10 assignments per hypothesis
@@ -201,7 +197,8 @@ fn example_compare_methods() {
     );
 
     // Create two identical initial states (with two tracks each)
-    let state1 = tracktor::filters::glmb::GlmbFilterState::from_tracks(vec![track1.clone(), track2.clone()]);
+    let state1 =
+        tracktor::filters::glmb::GlmbFilterState::from_tracks(vec![track1.clone(), track2.clone()]);
     let state2 = tracktor::filters::glmb::GlmbFilterState::from_tracks(vec![track1, track2]);
 
     // Measurements near expected positions
@@ -223,8 +220,16 @@ fn example_compare_methods() {
     let time2 = start2.elapsed();
 
     println!("\nResults:");
-    println!("  step():       {} hypotheses, took {:?}", result1.num_hypotheses(), time1);
-    println!("  step_joint(): {} hypotheses, took {:?}", result2.num_hypotheses(), time2);
+    println!(
+        "  step():       {} hypotheses, took {:?}",
+        result1.num_hypotheses(),
+        time1
+    );
+    println!(
+        "  step_joint(): {} hypotheses, took {:?}",
+        result2.num_hypotheses(),
+        time2
+    );
 
     // Compare best hypothesis estimates
     let est1 = extract_best_hypothesis(&result1);
@@ -242,7 +247,11 @@ fn example_compare_methods() {
 
         println!("\n    Position from step():       ({:.2}, {:.2})", x1, y1);
         println!("    Position from step_joint(): ({:.2}, {:.2})", x2, y2);
-        println!("    Difference: ({:.4}, {:.4})", (x1 - x2).abs(), (y1 - y2).abs());
+        println!(
+            "    Difference: ({:.4}, {:.4})",
+            (x1 - x2).abs(),
+            (y1 - y2).abs()
+        );
     }
 
     println!("\nNote: step_joint() is more efficient when there are many hypotheses");
