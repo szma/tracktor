@@ -20,6 +20,8 @@ pub mod types;
 pub mod utils;
 
 pub mod prelude {
+    #[cfg(feature = "alloc")]
+    pub use crate::filters::cphd::*;
     pub use crate::filters::ekf::*;
     #[cfg(feature = "alloc")]
     pub use crate::filters::glmb::{
