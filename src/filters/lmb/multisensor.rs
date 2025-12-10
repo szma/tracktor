@@ -16,9 +16,9 @@ use super::fusion::{
     ParallelUpdateMerger,
 };
 use super::types::{LmbTrack, LmbTrackSet};
-use crate::filters::phd::{Predicted, UpdateStats, Updated};
 use crate::models::{ClutterModel, ObservationModel, TransitionModel};
 use crate::types::labels::Label;
+use crate::types::phase::{Predicted, UpdateStats, Updated};
 use crate::types::spaces::{Measurement, StateCovariance};
 
 // ============================================================================

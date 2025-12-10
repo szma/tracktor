@@ -11,7 +11,6 @@
 //! - Numerical stability edge cases
 //! - LMBM-specific tests
 
-#![cfg(test)]
 #![cfg(feature = "alloc")]
 
 use alloc::vec;
@@ -30,13 +29,13 @@ use crate::filters::lmb::multisensor::{
     MultisensorLmbFilter, MultisensorLmbFilterBuilder, SensorConfig,
 };
 use crate::filters::lmb::types::{LmbTrack, LmbTrackSet, LmbmHypothesis, LmbmState};
-use crate::filters::phd::Updated;
 use crate::models::{
     ClutterModel, ConstantVelocity2D, NonlinearObservationModel, ObservationModel,
     PositionSensor2D, RangeBearingSensor, UniformClutter2D, UniformClutterRangeBearing,
 };
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
+use crate::types::phase::Updated;
 use crate::types::spaces::{Measurement, MeasurementCovariance, StateCovariance, StateVector};
 use crate::types::transforms::ObservationMatrix;
 
