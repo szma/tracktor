@@ -18,14 +18,14 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::filters::lmb::filter::{
-    extract_lmb_estimates, extract_lmb_estimates_threshold, LabeledBirthModel, LmbFilter,
-    LmbFilterState,
+    LabeledBirthModel, LmbFilter, LmbFilterState, extract_lmb_estimates,
+    extract_lmb_estimates_threshold,
 };
 use crate::filters::lmb::fusion::{
     ArithmeticAverageMerger, GeometricAverageMerger, IteratedCorrectorMerger, Merger,
     ParallelUpdateMerger,
 };
-use crate::filters::lmb::lmbm::{extract_best_hypothesis, LmbmFilter, LmbmFilterState};
+use crate::filters::lmb::lmbm::{LmbmFilter, LmbmFilterState, extract_best_hypothesis};
 use crate::filters::lmb::multisensor::{
     MultisensorLmbFilter, MultisensorLmbFilterBuilder, SensorConfig,
 };

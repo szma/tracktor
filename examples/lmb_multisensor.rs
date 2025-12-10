@@ -7,7 +7,7 @@
 //! - IC-LMB: Iterated Corrector
 
 use tracktor::filters::lmb::{
-    extract_lmb_estimates, LabeledBirthModel, LmbTrack, MultisensorLmbFilterBuilder, SensorConfig,
+    LabeledBirthModel, LmbTrack, MultisensorLmbFilterBuilder, SensorConfig, extract_lmb_estimates,
 };
 use tracktor::prelude::*;
 

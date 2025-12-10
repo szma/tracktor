@@ -3,7 +3,7 @@
 //! Demonstrates single-sensor multi-target tracking with track identity
 //! preservation using the LMB filter.
 
-use tracktor::filters::lmb::{extract_lmb_estimates, LabeledBirthModel, LmbFilter, LmbTrack};
+use tracktor::filters::lmb::{LabeledBirthModel, LmbFilter, LmbTrack, extract_lmb_estimates};
 use tracktor::prelude::*;
 
 // Labeled birth model implementation

@@ -19,7 +19,7 @@ use rand_distr::Distribution;
 
 use tracktor::filters::phd::GmPhdFilter;
 use tracktor::prelude::*;
-use tracktor::utils::{extract_targets, prune_and_merge, ExtractionConfig, PruningConfig};
+use tracktor::utils::{ExtractionConfig, PruningConfig, extract_targets, prune_and_merge};
 
 // ============================================================================
 // Simulation Parameters (Vo & Ma style)
