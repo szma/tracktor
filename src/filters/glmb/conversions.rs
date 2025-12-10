@@ -14,7 +14,6 @@
 //! Converting GLMB to LMB computes the marginal existence and state for each
 //! label, losing correlation information.
 
-#![allow(clippy::assign_op_pattern)]
 
 use nalgebra::{ComplexField, RealField};
 use num_traits::Float;
@@ -117,7 +116,7 @@ pub fn lmb_to_glmb<T: RealField + Float + Copy, const N: usize>(
                 if combo.contains(&i) {
                     // Track exists in this hypothesis
                     if track.existence > T::zero() {
-                        log_weight = log_weight + ComplexField::ln(track.existence);
+                        log_weight += ComplexField::ln(track.existence);
                     } else {
                         valid = false;
                         break;
@@ -134,7 +133,7 @@ pub fn lmb_to_glmb<T: RealField + Float + Copy, const N: usize>(
                     // Track does not exist
                     let one_minus_r = T::one() - track.existence;
                     if one_minus_r > T::zero() {
-                        log_weight = log_weight + ComplexField::ln(one_minus_r);
+                        log_weight += ComplexField::ln(one_minus_r);
                     } else {
                         valid = false;
                         break;
@@ -196,7 +195,7 @@ pub fn lmb_to_glmb_full<T: RealField + Float + Copy, const N: usize>(
 
             if included {
                 if track.existence > T::zero() {
-                    log_weight = log_weight + ComplexField::ln(track.existence);
+                    log_weight += ComplexField::ln(track.existence);
                 } else {
                     valid = false;
                     break;
@@ -211,7 +210,7 @@ pub fn lmb_to_glmb_full<T: RealField + Float + Copy, const N: usize>(
             } else {
                 let one_minus_r = T::one() - track.existence;
                 if one_minus_r > T::zero() {
-                    log_weight = log_weight + ComplexField::ln(one_minus_r);
+                    log_weight += ComplexField::ln(one_minus_r);
                 } else {
                     valid = false;
                     break;
@@ -302,7 +301,7 @@ pub fn glmb_to_lmb<T: RealField + Float + Copy, const N: usize>(
             });
 
             // Accumulate existence probability
-            entry.1 = entry.1 + norm_w;
+            entry.1 += norm_w;
         }
     }
 
@@ -314,7 +313,7 @@ pub fn glmb_to_lmb<T: RealField + Float + Copy, const N: usize>(
         let comp_total = components.total_weight();
         if comp_total > T::zero() {
             for c in components.iter_mut() {
-                c.weight = c.weight / comp_total;
+                c.weight /= comp_total;
             }
         }
 
@@ -391,7 +390,7 @@ pub fn glmb_to_lmb_merged<T: RealField + Float + Copy, const N: usize>(
             // Using P_merged = E[P] + E[(x - x_mean)(x - x_mean)^T]
             entry.1 = entry.1.add(&track.state.covariance.scale(norm_w));
 
-            entry.2 = entry.2 + norm_w;
+            entry.2 += norm_w;
         }
     }
 

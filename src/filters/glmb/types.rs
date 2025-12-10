@@ -6,7 +6,6 @@
 //! multi-target distribution as a mixture of hypotheses, where each hypothesis
 //! specifies which tracks exist and their states.
 
-#![allow(clippy::assign_op_pattern)]
 
 use core::marker::PhantomData;
 use nalgebra::RealField;
@@ -246,7 +245,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbDensity<T, N> {
 
         if max_log.is_finite() {
             for h in &mut self.hypotheses {
-                h.log_weight = h.log_weight - max_log;
+                h.log_weight -= max_log;
             }
         }
     }
@@ -430,7 +429,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbDensity<T, N> {
                 entry.0 = StateVector::from_svector(
                     entry.0.as_svector() + track.state.mean.as_svector().scale(norm_w),
                 );
-                entry.1 = entry.1 + norm_w;
+                entry.1 += norm_w;
             }
         }
 
