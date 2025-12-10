@@ -82,6 +82,43 @@ pub trait LabeledBirthModel<T: RealField, const N: usize> {
     fn expected_birth_count(&self) -> T;
 }
 
+/// A birth model that produces no birth tracks.
+///
+/// Useful for testing, benchmarking, or scenarios where track
+/// initialization is handled externally.
+///
+/// # Example
+///
+/// ```
+/// use tracktor::filters::lmb::{LabeledBirthModel, NoBirthModel};
+/// use tracktor::types::labels::LabelGenerator;
+///
+/// let birth = NoBirthModel;
+/// let mut label_gen = LabelGenerator::new();
+///
+/// // Type annotation needed to specify state dimension
+/// let tracks: Vec<tracktor::types::labels::BernoulliTrack<f64, 4>> =
+///     birth.birth_tracks(&mut label_gen);
+/// assert!(tracks.is_empty());
+///
+/// // Use turbofish to specify types for expected_birth_count
+/// assert_eq!(LabeledBirthModel::<f64, 4>::expected_birth_count(&birth), 0.0);
+/// ```
+#[cfg(feature = "alloc")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoBirthModel;
+
+#[cfg(feature = "alloc")]
+impl<T: RealField, const N: usize> LabeledBirthModel<T, N> for NoBirthModel {
+    fn birth_tracks(&self, _label_gen: &mut LabelGenerator) -> Vec<BernoulliTrack<T, N>> {
+        Vec::new()
+    }
+
+    fn expected_birth_count(&self) -> T {
+        T::zero()
+    }
+}
+
 // ============================================================================
 // LMB Filter State
 // ============================================================================
