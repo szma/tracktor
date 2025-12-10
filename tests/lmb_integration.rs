@@ -13,31 +13,28 @@
 
 #![cfg(feature = "alloc")]
 
-use alloc::vec;
-use alloc::vec::Vec;
-
-use crate::filters::lmb::filter::{
+use tracktor::filters::lmb::filter::{
     LabeledBirthModel, LmbFilter, LmbFilterState, extract_lmb_estimates,
     extract_lmb_estimates_threshold,
 };
-use crate::filters::lmb::fusion::{
+use tracktor::filters::lmb::fusion::{
     ArithmeticAverageMerger, GeometricAverageMerger, IteratedCorrectorMerger, Merger,
     ParallelUpdateMerger,
 };
-use crate::filters::lmb::lmbm::{LmbmFilter, LmbmFilterState, extract_best_hypothesis};
-use crate::filters::lmb::multisensor::{
+use tracktor::filters::lmb::lmbm::{LmbmFilter, LmbmFilterState, extract_best_hypothesis};
+use tracktor::filters::lmb::multisensor::{
     MultisensorLmbFilter, MultisensorLmbFilterBuilder, SensorConfig,
 };
-use crate::filters::lmb::types::{LmbTrack, LmbTrackSet, LmbmHypothesis, LmbmState};
-use crate::models::{
+use tracktor::filters::lmb::types::{LmbTrack, LmbTrackSet, LmbmHypothesis, LmbmState};
+use tracktor::models::{
     ClutterModel, ConstantVelocity2D, NonlinearObservationModel, ObservationModel,
     PositionSensor2D, RangeBearingSensor, UniformClutter2D, UniformClutterRangeBearing,
 };
-use crate::types::gaussian::GaussianState;
-use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
-use crate::types::phase::Updated;
-use crate::types::spaces::{Measurement, MeasurementCovariance, StateCovariance, StateVector};
-use crate::types::transforms::ObservationMatrix;
+use tracktor::types::gaussian::GaussianState;
+use tracktor::types::labels::{BernoulliTrack, Label, LabelGenerator};
+use tracktor::types::phase::Updated;
+use tracktor::types::spaces::{Measurement, MeasurementCovariance, StateCovariance, StateVector};
+use tracktor::types::transforms::ObservationMatrix;
 
 // ============================================================================
 // Test Helpers
@@ -1348,7 +1345,7 @@ mod track_set_tests {
 
     #[test]
     fn test_weighted_mean_multiple_components() {
-        use crate::types::gaussian::GaussianMixture;
+        use tracktor::types::gaussian::GaussianMixture;
 
         let label = Label::new(0, 0);
         let cov = StateCovariance::identity();
