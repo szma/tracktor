@@ -14,6 +14,8 @@
 //! Converting GLMB to LMB computes the marginal existence and state for each
 //! label, losing correlation information.
 
+#![allow(clippy::assign_op_pattern)]
+
 use nalgebra::{ComplexField, RealField};
 use num_traits::Float;
 
@@ -77,13 +79,13 @@ pub fn lmb_to_glmb<T: RealField + Float + Copy, const N: usize>(
         if map_card > 0 {
             cards.push(map_card - 1);
         }
-        if map_card + 1 <= n_tracks {
+        if map_card < n_tracks {
             cards.push(map_card + 1);
         }
         if map_card > 1 {
             cards.push(map_card - 2);
         }
-        if map_card + 2 <= n_tracks {
+        if map_card + 1 < n_tracks {
             cards.push(map_card + 2);
         }
         // Include 0 if not already present and map_card is small
