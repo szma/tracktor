@@ -5,10 +5,6 @@
 use nalgebra::RealField;
 use num_traits::Float;
 
-#[cfg(feature = "alloc")]
-#[allow(unused_imports)]
-use alloc::vec::Vec;
-
 use super::types::LmbTrack;
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::BernoulliTrack;

@@ -93,20 +93,6 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         Self::from_hypotheses(vec![hypothesis])
     }
 
-    /// Creates an Updated state from components (for internal use).
-    #[allow(dead_code)]
-    pub(crate) fn from_components(
-        density: GlmbDensity<T, N>,
-        label_gen: LabelGenerator,
-        time_step: u32,
-    ) -> Self {
-        Self {
-            density,
-            label_gen,
-            time_step,
-            _phase: PhantomData,
-        }
-    }
 
     /// Returns the number of hypotheses.
     #[inline]
@@ -627,20 +613,6 @@ impl<T: RealField + Float + Copy, const N: usize> Default for GlmbFilterState<T,
 
 #[cfg(feature = "alloc")]
 impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicted> {
-    /// Creates a Predicted state from components (for internal use).
-    #[allow(dead_code)]
-    pub(crate) fn from_components(
-        density: GlmbDensity<T, N>,
-        label_gen: LabelGenerator,
-        time_step: u32,
-    ) -> Self {
-        Self {
-            density,
-            label_gen,
-            time_step,
-            _phase: PhantomData,
-        }
-    }
 
     /// Returns the expected number of targets (before update).
     pub fn expected_target_count(&self) -> T {
@@ -1082,7 +1054,6 @@ fn generate_hypotheses_from_assignment<
 
 /// Generates new hypotheses using EKF-style linearization for nonlinear sensors.
 #[cfg(feature = "alloc")]
-#[allow(clippy::too_many_arguments)]
 fn generate_hypotheses_ekf<
     T: RealField + Float + Copy,
     const N: usize,

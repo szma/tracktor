@@ -117,7 +117,7 @@ impl<T: RealField + Copy> AssociationResult<T> {
 /// * `N` - Maximum number of tracks
 /// * `M` - Maximum number of measurements
 pub struct FixedAssociationResult<T: RealField, const N: usize, const M: usize> {
-    /// Marginal weights [track][measurement+1] (index 0 = miss)
+    /// Marginal weights `[track][measurement+1]` (index 0 = miss)
     pub weights: [[T; M]; N],
     /// Updated existence probabilities
     pub existence: [T; N],

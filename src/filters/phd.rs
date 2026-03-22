@@ -357,65 +357,6 @@ where
 // State Extraction (Legacy - prefer utils::extraction)
 // ============================================================================
 
-/// Extracts target states from a PHD filter state.
-///
-/// This is a simple extraction method. For more sophisticated extraction
-/// strategies (local maxima, expected count, etc.), use `crate::utils::extract_targets`
-/// with an `ExtractionConfig`.
-#[cfg(feature = "alloc")]
-#[deprecated(
-    since = "0.2.0",
-    note = "Use crate::utils::extract_targets with ExtractionConfig instead"
-)]
-pub fn extract_states<T: RealField + Float + Copy, const N: usize, Phase>(
-    state: &PhdFilterState<T, N, Phase>,
-    threshold: T,
-) -> Vec<(StateVector<T, N>, T)> {
-    state
-        .mixture
-        .iter()
-        .filter(|c| c.weight >= threshold)
-        .map(|c| (c.mean, c.weight))
-        .collect()
-}
-
-/// Extracts states using MAP (Maximum A Posteriori) estimation.
-///
-/// Returns the N states with highest weights.
-///
-/// For more sophisticated extraction strategies, use `crate::utils::extract_targets`
-/// with `ExtractionConfig::top_n()`.
-#[cfg(feature = "alloc")]
-#[deprecated(
-    since = "0.2.0",
-    note = "Use crate::utils::extract_targets with ExtractionConfig::top_n() instead"
-)]
-pub fn extract_states_map<T: RealField + Float + Copy, const N: usize, Phase>(
-    state: &PhdFilterState<T, N, Phase>,
-    n_targets: usize,
-) -> Vec<(StateVector<T, N>, T)> {
-    let mut components: Vec<_> = state.mixture.iter().map(|c| (c.mean, c.weight)).collect();
-
-    // Sort by weight descending
-    components.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(core::cmp::Ordering::Equal));
-
-    components.into_iter().take(n_targets).collect()
-}
-
-/// Estimates the number of targets by rounding total weight.
-///
-/// For a more complete API, use `crate::utils::estimate_cardinality`.
-#[cfg(feature = "alloc")]
-#[deprecated(
-    since = "0.2.0",
-    note = "Use crate::utils::estimate_cardinality instead"
-)]
-pub fn estimate_target_count<T: RealField + Float + Copy, const N: usize, Phase>(
-    state: &PhdFilterState<T, N, Phase>,
-) -> usize {
-    let total = state.mixture.total_weight();
-    num_traits::Float::round(total).to_usize().unwrap_or(0)
-}
 
 #[cfg(test)]
 mod tests {
@@ -510,6 +451,8 @@ mod tests {
     #[cfg(feature = "alloc")]
     #[test]
     fn test_state_extraction() {
+        use crate::utils::{extract_targets, ExtractionConfig};
+
         let mut mixture = GaussianMixture::new();
         mixture.push(GaussianState::new(
             0.8,
@@ -525,12 +468,14 @@ mod tests {
         let state: PhdFilterState<f64, 4, Updated> = PhdFilterState::from_mixture(mixture);
 
         // Extract with threshold 0.5
-        let targets = extract_states(&state, 0.5);
+        let config = ExtractionConfig::weight_threshold(0.5);
+        let targets = extract_targets(&state.mixture, &config);
         assert_eq!(targets.len(), 1);
-        assert!((targets[0].0.index(0) - 10.0).abs() < 1e-10);
+        assert!((targets[0].state.index(0) - 10.0).abs() < 1e-10);
 
-        // Extract MAP with n=2
-        let targets = extract_states_map(&state, 2);
+        // Extract top-N with n=2
+        let config = ExtractionConfig::top_n(2);
+        let targets = extract_targets(&state.mixture, &config);
         assert_eq!(targets.len(), 2);
     }
 }

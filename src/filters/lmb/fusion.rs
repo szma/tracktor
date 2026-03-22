@@ -11,8 +11,6 @@ use alloc::vec::Vec;
 
 use super::types::LmbTrack;
 use crate::types::gaussian::GaussianState;
-#[allow(unused_imports)]
-use crate::types::labels::Label;
 use crate::types::spaces::{StateCovariance, StateVector};
 
 // ============================================================================
@@ -402,6 +400,7 @@ impl<T: RealField + Float + Copy, const N: usize> Merger<T, N> for IteratedCorre
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::labels::Label;
 
     fn create_test_track(label: Label, x: f64, existence: f64) -> LmbTrack<f64, 4> {
         let mean: StateVector<f64, 4> = StateVector::from_array([x, 0.0, 0.0, 0.0]);

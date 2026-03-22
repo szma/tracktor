@@ -22,8 +22,6 @@ use alloc::vec::Vec;
 
 use super::cardinality::map_cardinality_estimate;
 use super::types::{LmbTrack, LmbTrackSet, PosteriorGrid};
-#[allow(unused_imports)]
-use super::updaters::TrackUpdater;
 use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
@@ -78,7 +76,7 @@ impl<T: RealField + Float> Default for LbpConfig<T> {
 
 /// Birth model that generates labeled tracks for LMB filters.
 ///
-/// Extends the basic [`BirthModel`] with the ability to generate
+/// Extends the basic [`crate::models::BirthModel`] with the ability to generate
 /// labeled Bernoulli tracks with unique identifiers.
 #[cfg(feature = "alloc")]
 pub trait LabeledBirthModel<T: RealField, const N: usize> {

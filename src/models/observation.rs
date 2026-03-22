@@ -426,21 +426,6 @@ impl<T: RealField + Float + Copy> RangeBearingSensor<T> {
         ]))
     }
 
-    /// Legacy alias for `jacobian_at`. Prefer `jacobian_at` for clarity.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use jacobian_at() instead which returns Option"
-    )]
-    pub fn jacobian(&self, state: &StateVector<T, 4>) -> ObservationMatrix<T, 2, 4> {
-        self.jacobian_at(state)
-            .unwrap_or_else(ObservationMatrix::zeros)
-    }
-
-    /// Legacy alias for `observe_nonlinear`. Prefer `observe_nonlinear` for clarity.
-    #[deprecated(since = "0.2.0", note = "Use observe_nonlinear() instead")]
-    pub fn measure(&self, state: &StateVector<T, 4>) -> (T, T) {
-        self.observe_nonlinear(state)
-    }
 }
 
 impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 4, 2> for RangeBearingSensor<T> {
@@ -470,7 +455,7 @@ impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 4, 2> for RangeBe
 /// The turn rate (omega) is not observed.
 ///
 /// This is the same sensor as [`RangeBearingSensor`] but compatible with
-/// the [`CoordinatedTurn2D`] transition model.
+/// the [`super::CoordinatedTurn2D`] transition model.
 #[derive(Debug, Clone)]
 pub struct RangeBearingSensor5D<T: RealField> {
     /// Underlying 4D sensor
