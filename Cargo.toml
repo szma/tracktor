@@ -1,6 +1,6 @@
 [package]
 name = "tracktor"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 rust-version = "1.85"
 license = "AGPL-3.0-or-later"
@@ -15,7 +15,7 @@ std = ["alloc", "nalgebra/std"]
 alloc = ["nalgebra/alloc", "nalgebra/macros"]
 
 [dependencies]
-nalgebra = { version = "0.34", default-features = false }
+nalgebra = { version = "0.34", default-features = false, features = ["macros"] }
 num-traits = { version = "0.2", default-features = false, features = ["libm"] }
 
 [dev-dependencies]
