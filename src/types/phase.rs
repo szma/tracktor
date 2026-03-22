@@ -11,7 +11,6 @@ pub struct Predicted;
 pub struct Updated;
 ///
 /// Statistics from a filter update step, reporting any numerical issues.
-#[cfg(feature = "alloc")]
 #[derive(Debug, Clone, Default)]
 pub struct UpdateStats {
     /// Number of components where Kalman gain computation failed (singular innovation covariance)
@@ -24,7 +23,6 @@ pub struct UpdateStats {
     pub lbp_iterations: Option<usize>,
 }
 
-#[cfg(feature = "alloc")]
 impl UpdateStats {
     /// Returns true if any numerical issues were encountered.
     pub fn has_issues(&self) -> bool {

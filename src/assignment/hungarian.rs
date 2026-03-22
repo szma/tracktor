@@ -4,8 +4,11 @@
 //! the linear assignment problem in O(n³) time.
 
 #[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
+#[cfg(feature = "alloc")]
 use crate::TracktorError;
 
 /// Result of an assignment problem.

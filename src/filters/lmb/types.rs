@@ -5,13 +5,21 @@
 
 use core::marker::PhantomData;
 use nalgebra::RealField;
+#[cfg(feature = "alloc")]
 use num_traits::Float;
 
 #[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::gaussian::{GaussianMixture, GaussianState};
-use crate::types::labels::{BernoulliTrack, Label};
+use crate::types::gaussian::GaussianState;
+#[cfg(feature = "alloc")]
+use crate::types::gaussian::GaussianMixture;
+use crate::types::labels::Label;
+#[cfg(feature = "alloc")]
+use crate::types::labels::BernoulliTrack;
+#[cfg(feature = "alloc")]
 use crate::types::spaces::{StateCovariance, StateVector};
 
 // ============================================================================

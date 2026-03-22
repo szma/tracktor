@@ -15,10 +15,12 @@
 //! - [`lmb`]: Labeled Multi-Bernoulli filter
 //! - [`glmb`]: Generalized Labeled Multi-Bernoulli filter
 
+#[cfg(feature = "alloc")]
 pub mod cphd;
 pub mod ekf;
 pub mod glmb;
 pub mod kalman;
 pub mod lmb;
+#[cfg(feature = "alloc")]
 pub mod phd;
 pub mod ukf;

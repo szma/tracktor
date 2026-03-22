@@ -6,6 +6,7 @@
 use nalgebra::RealField;
 use num_traits::Float;
 
+use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
