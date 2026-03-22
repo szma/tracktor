@@ -95,7 +95,7 @@ pub struct GlmbHypothesis<T: RealField, const N: usize> {
     pub log_weight: T,
     /// Tracks in this hypothesis (all exist by definition)
     pub tracks: Vec<GlmbTrack<T, N>>,
-    /// Current timestep association: tracks[i] -> Some(meas_idx) or None (miss)
+    /// Current timestep association: `tracks[i]` -> `Some(meas_idx)` or `None` (miss)
     /// Length matches tracks.len()
     pub current_association: Vec<Option<usize>>,
 }

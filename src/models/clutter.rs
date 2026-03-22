@@ -163,15 +163,17 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 2> for UniformClutter2D<T> {
 
 /// Uniform clutter in a 3D rectangular region.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields reserved for future use
 pub struct UniformClutter3D<T: RealField> {
     /// Expected number of clutter measurements per scan
     clutter_rate: T,
     /// X bounds (min, max)
+    #[allow(dead_code)]
     x_bounds: (T, T),
     /// Y bounds (min, max)
+    #[allow(dead_code)]
     y_bounds: (T, T),
     /// Z bounds (min, max)
+    #[allow(dead_code)]
     z_bounds: (T, T),
     /// Precomputed volume
     volume: T,

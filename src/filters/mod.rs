@@ -10,8 +10,8 @@
 //!
 //! # Multi-Target Filters
 //!
-//! - [`phd::PhdFilter`]: Gaussian Mixture PHD filter
-//! - [`cphd::CphdFilter`]: Cardinalized PHD filter with improved cardinality estimation
+//! - [`PhdFilterState`](phd::PhdFilterState): Gaussian Mixture PHD filter
+//! - [`CphdFilterState`](cphd::CphdFilterState): Cardinalized PHD filter with improved cardinality estimation
 //! - [`lmb`]: Labeled Multi-Bernoulli filter
 //! - [`glmb`]: Generalized Labeled Multi-Bernoulli filter
 

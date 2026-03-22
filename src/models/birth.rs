@@ -16,33 +16,13 @@ use crate::types::spaces::{Measurement, StateCovariance, StateVector};
 /// Birth models describe the spontaneous appearance of new targets
 /// that were not present in the previous time step.
 pub trait BirthModel<T: RealField, const N: usize> {
-    /// Returns the birth intensity (Gaussian mixture components) as a slice.
-    ///
-    /// # Deprecation
-    /// This method is deprecated in favor of [`birth_components_vec`] which
-    /// supports dynamic birth component generation. New implementations
-    /// should implement `birth_components_vec` instead and can leave this
-    /// method with the default empty implementation.
-    #[cfg(feature = "alloc")]
-    #[deprecated(
-        since = "0.4.0",
-        note = "Use birth_components_vec() instead, which supports dynamic generation"
-    )]
-    fn birth_components(&self) -> &[GaussianState<T, N>] {
-        &[]
-    }
-
     /// Returns the birth intensity (Gaussian mixture components) as an owned Vec.
     ///
-    /// This is the preferred method for new implementations, especially for
+    /// This is the preferred method for implementations, especially for
     /// adaptive birth models that generate components dynamically.
-    ///
-    /// The default implementation calls the deprecated `birth_components()`
-    /// for backwards compatibility with existing implementations.
     #[cfg(feature = "alloc")]
     fn birth_components_vec(&self) -> Vec<GaussianState<T, N>> {
-        #[allow(deprecated)]
-        self.birth_components().to_vec()
+        Vec::new()
     }
 
     /// Returns the total expected number of births per time step.
@@ -116,11 +96,6 @@ impl<T: RealField + Copy, const N: usize> Default for FixedBirthModel<T, N> {
 
 #[cfg(feature = "alloc")]
 impl<T: RealField + Copy, const N: usize> BirthModel<T, N> for FixedBirthModel<T, N> {
-    #[allow(deprecated)]
-    fn birth_components(&self) -> &[GaussianState<T, N>] {
-        &self.components
-    }
-
     fn birth_components_vec(&self) -> Vec<GaussianState<T, N>> {
         self.components.clone()
     }
@@ -219,11 +194,6 @@ impl<T: RealField + Float + Copy> AdaptiveBirthModel<T, 4, 2> {
 
 #[cfg(feature = "alloc")]
 impl<T: RealField + Float + Copy> BirthModel<T, 4> for AdaptiveBirthModel<T, 4, 2> {
-    #[allow(deprecated)]
-    fn birth_components(&self) -> &[GaussianState<T, 4>] {
-        &self.base_components
-    }
-
     fn birth_components_vec(&self) -> Vec<GaussianState<T, 4>> {
         self.base_components.clone()
     }
@@ -320,11 +290,6 @@ impl<T: RealField + Float + Copy> UniformBirthModel2D<T> {
 
 #[cfg(feature = "alloc")]
 impl<T: RealField + Copy> BirthModel<T, 4> for UniformBirthModel2D<T> {
-    #[allow(deprecated)]
-    fn birth_components(&self) -> &[GaussianState<T, 4>] {
-        &self.components
-    }
-
     fn birth_components_vec(&self) -> Vec<GaussianState<T, 4>> {
         self.components.clone()
     }

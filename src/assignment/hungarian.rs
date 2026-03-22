@@ -11,7 +11,7 @@ use crate::TracktorError;
 /// Result of an assignment problem.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Assignment {
-    /// Assignment mapping: row i is assigned to column assignment[i]
+    /// Assignment mapping: row `i` is assigned to column `assignment[i]`
     /// None means the row is unassigned
     #[cfg(feature = "alloc")]
     pub mapping: Vec<Option<usize>>,

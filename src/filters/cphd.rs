@@ -65,7 +65,7 @@ impl CphdUpdateStats {
 pub struct CphdFilterState<T: RealField, const N: usize, Phase> {
     /// Gaussian mixture representing the PHD (intensity function)
     pub mixture: GaussianMixture<T, N>,
-    /// Cardinality distribution: rho[n] = P(exactly n targets exist)
+    /// Cardinality distribution: `rho[n]` = P(exactly `n` targets exist).
     /// Index 0 corresponds to 0 targets, index 1 to 1 target, etc.
     pub cardinality: Vec<T>,
     /// Current time step

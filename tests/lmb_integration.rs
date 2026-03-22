@@ -1575,8 +1575,6 @@ mod multisensor_fusion_tests {
     #[test]
     fn test_aa_lmb_two_sensors_same_measurement() {
         let transition = ConstantVelocity2D::new(1.0, 0.99);
-        let birth = NoBirthModel;
-
         let filter: MultisensorLmbFilter<f64, _, _, ArithmeticAverageMerger, 4> =
             MultisensorLmbFilterBuilder::new(transition.clone(), NoBirthModel)
                 .with_sensor_weights(vec![0.5, 0.5])
