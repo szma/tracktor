@@ -3,11 +3,13 @@
 //! Describes how new targets appear in the surveillance region.
 
 use nalgebra::RealField;
+#[cfg(feature = "alloc")]
 use num_traits::Float;
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
+#[cfg(feature = "alloc")]
 use crate::types::gaussian::GaussianState;
 use crate::types::spaces::{Measurement, StateCovariance, StateVector};
 

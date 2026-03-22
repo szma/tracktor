@@ -37,28 +37,33 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use tracktor::prelude::*;
-//! use tracktor::filters::glmb::*;
+//! use tracktor::filters::glmb::{
+//!     GlmbFilter, extract_best_hypothesis,
+//! };
+//! use tracktor::filters::lmb::NoBirthModel;
 //!
 //! // Create models
 //! let transition = ConstantVelocity2D::new(1.0, 0.99);
 //! let observation = PositionSensor2D::new(10.0, 0.9);
 //! let clutter = UniformClutter2D::new(5.0, (0.0, 100.0), (0.0, 100.0));
-//! let birth = MyLabeledBirthModel::new();
+//! let birth = NoBirthModel;
 //!
 //! // Create filter
 //! let filter = GlmbFilter::new(transition, observation, clutter, birth, 10);
 //! let mut state = filter.initial_state();
 //!
 //! // Process measurements
+//! let measurement_sequences: Vec<Vec<Measurement<f64, 2>>> = vec![];
+//! let dt = 1.0;
 //! for measurements in measurement_sequences {
-//!     let (new_state, stats) = filter.step(state, &measurements, dt);
+//!     let (new_state, _stats) = filter.step(state, &measurements, dt);
 //!     state = new_state;
 //!
 //!     // Extract estimates
 //!     let estimates = extract_best_hypothesis(&state);
-//!     for est in estimates {
+//!     for est in &estimates {
 //!         println!("Track {}: position = {:?}", est.label, est.state);
 //!     }
 //! }
@@ -72,10 +77,14 @@
 //!   of the Cardinalized Probability Hypothesis Density Filter"
 //! - Reuter, S., et al. (2014). "The Labeled Multi-Bernoulli Filter"
 
+#[cfg(feature = "alloc")]
 pub mod conversions;
+#[cfg(feature = "alloc")]
 pub mod filter;
 pub mod types;
 
+#[cfg(feature = "alloc")]
 pub use conversions::*;
+#[cfg(feature = "alloc")]
 pub use filter::*;
 pub use types::*;

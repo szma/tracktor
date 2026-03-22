@@ -9,7 +9,9 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::gaussian::{GaussianMixture, GaussianState};
+use crate::types::gaussian::GaussianState;
+#[cfg(feature = "alloc")]
+use crate::types::gaussian::GaussianMixture;
 use crate::types::spaces::{StateCovariance, StateVector};
 
 /// A target state estimate with associated uncertainty.

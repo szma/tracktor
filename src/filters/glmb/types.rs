@@ -11,10 +11,13 @@ use nalgebra::RealField;
 use num_traits::Float;
 
 #[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::Label;
+#[cfg(feature = "alloc")]
 use crate::types::spaces::{StateCovariance, StateVector};
 
 // ============================================================================
@@ -531,6 +534,35 @@ impl<T: RealField + Float> GlmbTruncationConfig<T> {
 impl<T: RealField + Float> Default for GlmbTruncationConfig<T> {
     fn default() -> Self {
         Self::default_config()
+    }
+}
+
+// ============================================================================
+// Update Configuration
+// ============================================================================
+
+/// Configuration for a GLMB update cycle.
+///
+/// Bundles truncation settings, k-best assignment count, and time step
+/// into a single struct to reduce argument counts.
+#[derive(Debug, Clone)]
+pub struct GlmbUpdateConfig<T: RealField> {
+    /// Truncation configuration for hypothesis management
+    pub truncation: GlmbTruncationConfig<T>,
+    /// Number of best assignments to generate per hypothesis group
+    pub k_best: usize,
+    /// Time step duration
+    pub dt: T,
+}
+
+impl<T: RealField + Float + Copy> GlmbUpdateConfig<T> {
+    /// Creates a new update configuration.
+    pub fn new(truncation: GlmbTruncationConfig<T>, k_best: usize, dt: T) -> Self {
+        Self {
+            truncation,
+            k_best,
+            dt,
+        }
     }
 }
 

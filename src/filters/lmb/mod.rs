@@ -16,16 +16,23 @@
 //!   Multi-Object Conjugate Priors"
 
 pub mod cardinality;
+#[cfg(feature = "alloc")]
 pub mod filter;
+#[cfg(feature = "alloc")]
 pub mod fusion;
+#[cfg(feature = "alloc")]
 pub mod lmbm;
+#[cfg(feature = "alloc")]
 pub mod multisensor;
 pub mod types;
+#[cfg(feature = "alloc")]
 pub mod updaters;
 
 pub use cardinality::*;
+#[cfg(feature = "alloc")]
 pub use filter::*;
 pub use types::*;
+#[cfg(feature = "alloc")]
 pub use updaters::*;
 
 #[cfg(feature = "alloc")]

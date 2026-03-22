@@ -25,6 +25,7 @@ use core::marker::PhantomData;
 use nalgebra::{ComplexField, RealField};
 use num_traits::Float;
 
+use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
@@ -131,10 +132,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
     /// - `observation_model`: Linear observation model
     /// - `clutter_model`: Clutter model for false alarm density
     /// - `birth_model`: Birth model for new track generation
-    /// - `truncation`: Truncation configuration
-    /// - `k_best`: Number of best assignments to generate per hypothesis group
-    /// - `dt`: Time step
-    #[allow(clippy::too_many_arguments)]
+    /// - `config`: Update configuration (truncation, k_best, dt)
     pub fn joint_predict_and_update<const M: usize, Trans, Obs, Clutter, Birth>(
         mut self,
         measurements: &[Measurement<T, M>],
@@ -142,9 +140,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         observation_model: &Obs,
         clutter_model: &Clutter,
         birth_model: &Birth,
-        truncation: &GlmbTruncationConfig<T>,
-        k_best: usize,
-        dt: T,
+        config: &super::types::GlmbUpdateConfig<T>,
     ) -> (GlmbFilterState<T, N, Updated>, UpdateStats)
     where
         Trans: TransitionModel<T, N>,
@@ -171,8 +167,8 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         }
 
         // Predict each unique track
-        let transition_matrix = transition_model.transition_matrix(dt);
-        let process_noise = transition_model.process_noise(dt);
+        let transition_matrix = transition_model.transition_matrix(config.dt);
+        let process_noise = transition_model.process_noise(config.dt);
 
         let mut predicted_tracks: BTreeMap<Label, (GlmbTrack<T, N>, T)> = BTreeMap::new();
 
@@ -421,7 +417,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             }
 
             // Run Murty's k-best
-            let assignments = crate::assignment::hungarian::murty_k_best(&cost_matrix, k_best);
+            let assignments = crate::assignment::hungarian::murty_k_best(&cost_matrix, config.k_best);
 
             // Generate hypotheses from assignments for each input hypothesis in this group
             for (_hyp_idx, base_log_weight) in &group {
@@ -500,13 +496,13 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             hypotheses: new_hypotheses,
         };
         new_density.normalize_log_weights();
-        new_density.prune_by_weight(truncation.log_weight_threshold);
+        new_density.prune_by_weight(config.truncation.log_weight_threshold);
 
-        if let Some(k_per_card) = truncation.max_per_cardinality {
+        if let Some(k_per_card) = config.truncation.max_per_cardinality {
             new_density.keep_top_k_per_cardinality(k_per_card);
         }
 
-        new_density.keep_top_k(truncation.max_hypotheses);
+        new_density.keep_top_k(config.truncation.max_hypotheses);
 
         // Ensure at least one hypothesis exists
         if new_density.is_empty() {
@@ -660,17 +656,21 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicte
 
         let mut new_hypotheses: Vec<GlmbHypothesis<T, N>> = Vec::new();
 
+        let ctx = HypothesisContext {
+            measurements,
+            birth_tracks: &birth_tracks,
+            meas_noise: &meas_noise,
+            k_best,
+        };
+
         // Process each input hypothesis
         for hypothesis in &self.density.hypotheses {
             let generated = generate_hypotheses_from_assignment(
                 hypothesis,
-                measurements,
-                &birth_tracks,
+                &ctx,
                 observation_model,
                 clutter_model,
                 &obs_matrix,
-                &meas_noise,
-                k_best,
                 &mut stats,
             );
 
@@ -743,16 +743,20 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicte
 
         let mut new_hypotheses: Vec<GlmbHypothesis<T, N>> = Vec::new();
 
+        let ctx = HypothesisContext {
+            measurements,
+            birth_tracks: &birth_tracks,
+            meas_noise: &meas_noise,
+            k_best,
+        };
+
         // Process each input hypothesis
         for hypothesis in &self.density.hypotheses {
             let generated = generate_hypotheses_ekf(
                 hypothesis,
-                measurements,
-                &birth_tracks,
+                &ctx,
                 observation_model,
                 clutter_model,
-                &meas_noise,
-                k_best,
                 &mut stats,
             );
 
@@ -793,9 +797,17 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicte
 // Hypothesis Generation (Linear)
 // ============================================================================
 
+/// Pre-computed context shared across hypothesis generation.
+#[cfg(feature = "alloc")]
+struct HypothesisContext<'a, T: RealField, const N: usize, const M: usize> {
+    measurements: &'a [Measurement<T, M>],
+    birth_tracks: &'a [crate::types::labels::BernoulliTrack<T, N>],
+    meas_noise: &'a crate::types::spaces::MeasurementCovariance<T, M>,
+    k_best: usize,
+}
+
 /// Generates new hypotheses from a single input hypothesis using Murty's algorithm.
 #[cfg(feature = "alloc")]
-#[allow(clippy::too_many_arguments)]
 fn generate_hypotheses_from_assignment<
     T: RealField + Float + Copy,
     const N: usize,
@@ -804,15 +816,16 @@ fn generate_hypotheses_from_assignment<
     Clutter: ClutterModel<T, M>,
 >(
     hypothesis: &GlmbHypothesis<T, N>,
-    measurements: &[Measurement<T, M>],
-    birth_tracks: &[crate::types::labels::BernoulliTrack<T, N>],
+    ctx: &HypothesisContext<'_, T, N, M>,
     observation_model: &Obs,
     clutter_model: &Clutter,
     obs_matrix: &crate::types::transforms::ObservationMatrix<T, M, N>,
-    meas_noise: &crate::types::spaces::MeasurementCovariance<T, M>,
-    k_best: usize,
     stats: &mut UpdateStats,
 ) -> Vec<GlmbHypothesis<T, N>> {
+    let measurements = ctx.measurements;
+    let birth_tracks = ctx.birth_tracks;
+    let meas_noise = ctx.meas_noise;
+    let k_best = ctx.k_best;
     let n_meas = measurements.len();
 
     // Build augmented track list: existing + potential births
@@ -1062,14 +1075,15 @@ fn generate_hypotheses_ekf<
     Clutter: ClutterModel<T, M>,
 >(
     hypothesis: &GlmbHypothesis<T, N>,
-    measurements: &[Measurement<T, M>],
-    birth_tracks: &[crate::types::labels::BernoulliTrack<T, N>],
+    ctx: &HypothesisContext<'_, T, N, M>,
     observation_model: &Obs,
     clutter_model: &Clutter,
-    meas_noise: &crate::types::spaces::MeasurementCovariance<T, M>,
-    k_best: usize,
     stats: &mut UpdateStats,
 ) -> Vec<GlmbHypothesis<T, N>> {
+    let measurements = ctx.measurements;
+    let birth_tracks = ctx.birth_tracks;
+    let meas_noise = ctx.meas_noise;
+    let k_best = ctx.k_best;
     let n_meas = measurements.len();
 
     // Build augmented track list
@@ -1506,15 +1520,18 @@ where
         measurements: &[Measurement<T, M>],
         dt: T,
     ) -> (GlmbFilterState<T, N, Updated>, UpdateStats) {
+        let config = super::types::GlmbUpdateConfig::new(
+            self.truncation.clone(),
+            self.k_best,
+            dt,
+        );
         state.joint_predict_and_update(
             measurements,
             &self.transition,
             &self.observation,
             &self.clutter,
             &self.birth,
-            &self.truncation,
-            self.k_best,
-            dt,
+            &config,
         )
     }
 }
@@ -1592,15 +1609,14 @@ mod tests {
         let measurement = Measurement::from_array([11.5, 20.8]);
 
         // Run joint predict and update
+        let config = crate::filters::glmb::types::GlmbUpdateConfig::new(truncation, 10, 1.0);
         let (new_state, stats) = state.joint_predict_and_update(
             &[measurement],
             &transition,
             &observation,
             &clutter,
             &birth,
-            &truncation,
-            10,
-            1.0,
+            &config,
         );
 
         // Should still have hypotheses

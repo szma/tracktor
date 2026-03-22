@@ -3,12 +3,18 @@
 //! Defines the common interface for data association algorithms used
 //! in multi-target tracking.
 
-use nalgebra::{ComplexField, RealField};
+use nalgebra::RealField;
+#[cfg(feature = "alloc")]
+use nalgebra::ComplexField;
+#[cfg(feature = "alloc")]
 use num_traits::Float;
 
 #[cfg(feature = "alloc")]
+use alloc::vec;
+#[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
+#[cfg(feature = "alloc")]
 use crate::TracktorError;
 
 // ============================================================================

@@ -53,12 +53,17 @@ extern crate alloc;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
+#[cfg(feature = "alloc")]
 use core::marker::PhantomData;
 
-use nalgebra::{RealField, SMatrix, SVector};
+use nalgebra::RealField;
+#[cfg(feature = "alloc")]
+use nalgebra::{SMatrix, SVector};
 use num_traits::Float;
 
+#[cfg(feature = "alloc")]
 use crate::models::{NonlinearObservationModel, NonlinearTransitionModel, TransitionModel};
+#[cfg(feature = "alloc")]
 use crate::types::spaces::{Measurement, StateCovariance, StateVector};
 
 // Re-export KalmanState as UkfState for consistency
@@ -116,7 +121,10 @@ impl<T: RealField + Float + Copy> UkfParams<T> {
         assert!(alpha > T::zero(), "Alpha must be positive");
         Self { alpha, beta, kappa }
     }
+}
 
+#[cfg(feature = "alloc")]
+impl<T: RealField + Float + Copy> UkfParams<T> {
     /// Computes the scaling parameter λ = α²(n + κ) - n
     #[inline]
     fn lambda(&self, n: usize) -> T {

@@ -8,7 +8,11 @@ use num_traits::Float;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::types::gaussian::{GaussianMixture, GaussianState};
+#[cfg(feature = "alloc")]
+use crate::types::gaussian::GaussianState;
+#[cfg(feature = "alloc")]
+use crate::types::gaussian::GaussianMixture;
+#[cfg(feature = "alloc")]
 use crate::types::spaces::{StateCovariance, StateVector};
 
 /// Configuration for pruning and merging operations.

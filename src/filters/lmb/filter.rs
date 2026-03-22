@@ -17,6 +17,7 @@ use core::marker::PhantomData;
 use nalgebra::{ComplexField, RealField};
 use num_traits::Float;
 
+use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
@@ -520,11 +521,16 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
     /// - `clutter_model`: Clutter model in the same coordinate system as measurements
     ///
     /// # Example
-    /// ```ignore
-    /// let sensor = RangeBearingSensor::new(sigma_r, sigma_b, p_d);
-    /// let clutter = UniformClutterRangeBearing::new(rate, range_bounds, bearing_bounds);
+    /// ```no_run
+    /// use tracktor::prelude::*;
+    /// use tracktor::types::phase::Predicted;
     ///
-    /// let measurements = vec![Measurement::from_array([range, bearing])];
+    /// let sensor = RangeBearingSensor::new(1.0, 0.01, 0.9);
+    /// let clutter = UniformClutterRangeBearing::new(5.0, (0.0, 1000.0), (-3.14, 3.14));
+    ///
+    /// let measurements = vec![Measurement::from_array([500.0, 0.5])];
+    /// // `predicted` would come from a prior predict() call
+    /// # let predicted: LmbFilterState<f64, 4, Predicted> = unimplemented!();
     /// let (updated, stats) = predicted.update_ekf(&measurements, &sensor, &clutter);
     /// ```
     pub fn update_ekf<const M: usize, Obs, Clutter>(
