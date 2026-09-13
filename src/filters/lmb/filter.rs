@@ -22,8 +22,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::cardinality::map_cardinality_estimate;
-use super::types::{LmbTrack, LmbTrackSet, PosteriorGrid};
-use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
+use super::types::{LmbTrack, LmbTrackSet};
+use crate::models::{
+    ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel,
+    effective_clutter_intensity,
+};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
 use crate::types::phase::{Predicted, UpdateStats, Updated};
@@ -351,7 +354,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         let meas_noise = observation_model.measurement_noise();
 
         // Precompute posteriors and likelihoods for all track-measurement pairs
-        let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
+        #[allow(clippy::type_complexity)]
+        let mut posteriors: Vec<Vec<Vec<(StateVector<T, N>, StateCovariance<T, N>, T)>>> =
+            vec![vec![Vec::new(); n_meas]; n_tracks];
         let mut likelihood_matrix: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
         let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
 
@@ -366,11 +371,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             detection_probs.push(p_d);
 
             for (j, measurement) in measurements.iter().enumerate() {
-                // Sum likelihood over all components
+                // Sum likelihood over all components and retain each conditional mode.
                 let mut total_likelihood = T::zero();
-                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> =
-                    None;
-                let mut best_weight = T::zero();
 
                 for component in track.components.iter() {
                     let predicted_meas = obs_matrix.observe(&component.mean);
@@ -393,36 +395,28 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                     }
 
                     let weighted_likelihood = component.weight * likelihood;
-                    total_likelihood += weighted_likelihood;
+                    if let Some(kalman_gain) =
+                        compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
+                    {
+                        let correction = kalman_gain.correct(&innovation);
+                        let updated_mean = StateVector::from_svector(
+                            component.mean.as_svector() + correction.as_svector(),
+                        );
+                        let updated_cov = joseph_update(
+                            &component.covariance,
+                            &kalman_gain,
+                            &obs_matrix,
+                            &meas_noise,
+                        );
 
-                    // Track best posterior for this component
-                    if weighted_likelihood > best_weight {
-                        if let Some(kalman_gain) =
-                            compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
-                        {
-                            let correction = kalman_gain.correct(&innovation);
-                            let updated_mean = StateVector::from_svector(
-                                component.mean.as_svector() + correction.as_svector(),
-                            );
-                            let updated_cov = joseph_update(
-                                &component.covariance,
-                                &kalman_gain,
-                                &obs_matrix,
-                                &meas_noise,
-                            );
-
-                            best_posterior = Some((updated_mean, updated_cov, likelihood));
-                            best_weight = weighted_likelihood;
-                        } else {
-                            stats.singular_covariance_count += 1;
-                        }
+                        total_likelihood += weighted_likelihood;
+                        posteriors[i][j].push((updated_mean, updated_cov, weighted_likelihood));
+                    } else {
+                        stats.singular_covariance_count += 1;
                     }
                 }
 
                 likelihood_matrix[i][j] = total_likelihood;
-                if let Some(posterior) = best_posterior {
-                    posteriors.set(i, j, posterior);
-                }
             }
         }
 
@@ -471,14 +465,17 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             // Detection components (one for each measurement)
             for j in 0..n_meas {
                 let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
-                if det_weight > T::from(1e-10).unwrap()
-                    && let Some((mean, cov, _)) = posteriors.get(i, j)
-                {
-                    new_components.push(GaussianState {
-                        weight: det_weight,
-                        mean: *mean,
-                        covariance: *cov,
-                    });
+                if det_weight > T::from(1e-10).unwrap() {
+                    let measurement_likelihood = likelihood_matrix[i][j];
+                    if measurement_likelihood > T::zero() {
+                        for (mean, covariance, weighted_likelihood) in &posteriors[i][j] {
+                            new_components.push(GaussianState {
+                                weight: det_weight * *weighted_likelihood / measurement_likelihood,
+                                mean: *mean,
+                                covariance: *covariance,
+                            });
+                        }
+                    }
                 }
             }
 
@@ -608,7 +605,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         let meas_noise = observation_model.measurement_noise();
 
         // Precompute posteriors and likelihoods for all track-measurement pairs
-        let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
+        #[allow(clippy::type_complexity)]
+        let mut posteriors: Vec<Vec<Vec<(StateVector<T, N>, StateCovariance<T, N>, T)>>> =
+            vec![vec![Vec::new(); n_meas]; n_tracks];
         let mut likelihood_matrix: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
         let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
 
@@ -623,11 +622,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             detection_probs.push(p_d);
 
             for (j, measurement) in measurements.iter().enumerate() {
-                // Sum likelihood over all components
+                // Sum likelihood over all components and retain each conditional mode.
                 let mut total_likelihood = T::zero();
-                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> =
-                    None;
-                let mut best_weight = T::zero();
 
                 for component in track.components.iter() {
                     // EKF: Linearize at component mean
@@ -644,7 +640,7 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                     let predicted_meas = observation_model.observe(&component.mean);
 
                     // Innovation in measurement space: y = z - h(x)
-                    let innovation = measurement.innovation(predicted_meas);
+                    let innovation = observation_model.innovation(measurement, &predicted_meas);
 
                     let innovation_cov = compute_innovation_covariance(
                         &component.covariance,
@@ -664,36 +660,28 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                     }
 
                     let weighted_likelihood = component.weight * likelihood;
-                    total_likelihood += weighted_likelihood;
+                    if let Some(kalman_gain) =
+                        compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
+                    {
+                        let correction = kalman_gain.correct(&innovation);
+                        let updated_mean = StateVector::from_svector(
+                            component.mean.as_svector() + correction.as_svector(),
+                        );
+                        let updated_cov = joseph_update(
+                            &component.covariance,
+                            &kalman_gain,
+                            &obs_matrix,
+                            &meas_noise,
+                        );
 
-                    // Track best posterior for this component
-                    if weighted_likelihood > best_weight {
-                        if let Some(kalman_gain) =
-                            compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
-                        {
-                            let correction = kalman_gain.correct(&innovation);
-                            let updated_mean = StateVector::from_svector(
-                                component.mean.as_svector() + correction.as_svector(),
-                            );
-                            let updated_cov = joseph_update(
-                                &component.covariance,
-                                &kalman_gain,
-                                &obs_matrix,
-                                &meas_noise,
-                            );
-
-                            best_posterior = Some((updated_mean, updated_cov, likelihood));
-                            best_weight = weighted_likelihood;
-                        } else {
-                            stats.singular_covariance_count += 1;
-                        }
+                        total_likelihood += weighted_likelihood;
+                        posteriors[i][j].push((updated_mean, updated_cov, weighted_likelihood));
+                    } else {
+                        stats.singular_covariance_count += 1;
                     }
                 }
 
                 likelihood_matrix[i][j] = total_likelihood;
-                if let Some(posterior) = best_posterior {
-                    posteriors.set(i, j, posterior);
-                }
             }
         }
 
@@ -742,14 +730,17 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             // Detection components (one for each measurement)
             for j in 0..n_meas {
                 let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
-                if det_weight > T::from(1e-10).unwrap()
-                    && let Some((mean, cov, _)) = posteriors.get(i, j)
-                {
-                    new_components.push(GaussianState {
-                        weight: det_weight,
-                        mean: *mean,
-                        covariance: *cov,
-                    });
+                if det_weight > T::from(1e-10).unwrap() {
+                    let measurement_likelihood = likelihood_matrix[i][j];
+                    if measurement_likelihood > T::zero() {
+                        for (mean, covariance, weighted_likelihood) in &posteriors[i][j] {
+                            new_components.push(GaussianState {
+                                weight: det_weight * *weighted_likelihood / measurement_likelihood,
+                                mean: *mean,
+                                covariance: *covariance,
+                            });
+                        }
+                    }
                 }
             }
 
@@ -855,8 +846,8 @@ fn loopy_belief_propagation<
         let r = existence_probs[i];
         let p_d = detection_probs[i];
         for j in 0..n_meas {
-            let kappa = clutter_intensities[j];
-            if kappa > T::zero() && eta[i] > T::zero() {
+            let kappa = effective_clutter_intensity(clutter_intensities[j]);
+            if eta[i] > T::zero() {
                 psi[i][j] = r * p_d * likelihood_matrix[i][j] / (kappa * eta[i]);
             }
         }
@@ -1129,7 +1120,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::gaussian::GaussianState;
+    use crate::models::{
+        ConstantVelocity2D, PositionSensor2D, RangeBearingSensor, UniformClutter2D,
+        UniformClutterRangeBearing,
+    };
+    use crate::types::gaussian::{GaussianMixture, GaussianState};
     use crate::types::spaces::StateCovariance;
 
     #[cfg(feature = "alloc")]
@@ -1153,5 +1148,96 @@ mod tests {
 
         assert_eq!(filter_state.num_tracks(), 1);
         assert!((filter_state.expected_target_count() - 0.9).abs() < 1e-10);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_linear_update_retains_all_mixture_posterior_modes() {
+        let components = GaussianMixture::from_components(vec![
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([45.0, 50.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([55.0, 50.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        ]);
+        let state = LmbFilterState::from_tracks(vec![LmbTrack::with_components(
+            Label::new(0, 0),
+            0.9,
+            components,
+        )]);
+        let predicted = state.predict(&ConstantVelocity2D::new(0.0, 1.0), &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([50.0, 50.0])],
+            &PositionSensor2D::new(10.0, 0.9),
+            &UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0)),
+        );
+
+        // Two missed-detection modes plus two measurement-conditioned modes.
+        assert_eq!(updated.tracks.tracks[0].components.len(), 4);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_out_of_support_clutter_still_allows_lbp_target_association() {
+        let track = LmbTrack::new(
+            Label::new(0, 0),
+            0.9,
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let predicted = LmbFilterState::from_tracks(vec![track]).predict(
+            &ConstantVelocity2D::new(0.0, 1.0),
+            &NoBirthModel,
+            0.0,
+        );
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([20.0, 20.0])],
+            &PositionSensor2D::new(1.0, 0.9),
+            &UniformClutter2D::new(1.0, (0.0, 10.0), (0.0, 10.0)),
+        );
+
+        assert!(updated.tracks.tracks[0].existence > 0.9);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_ekf_update_retains_all_mixture_posterior_modes() {
+        let components = GaussianMixture::from_components(vec![
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([50.0, -5.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([50.0, 5.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        ]);
+        let state = LmbFilterState::from_tracks(vec![LmbTrack::with_components(
+            Label::new(0, 0),
+            0.9,
+            components,
+        )]);
+        let predicted = state.predict(&ConstantVelocity2D::new(0.0, 1.0), &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update_ekf(
+            &[Measurement::from_array([50.25, 0.0])],
+            &RangeBearingSensor::new(10.0, 0.2, 0.9),
+            &UniformClutterRangeBearing::new(
+                1.0,
+                (0.0, 100.0),
+                (-core::f64::consts::PI, core::f64::consts::PI),
+            ),
+        );
+
+        assert_eq!(updated.tracks.tracks[0].components.len(), 4);
     }
 }

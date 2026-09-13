@@ -18,6 +18,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::filters::lmb::cardinality::elementary_symmetric_function;
+use crate::models::effective_clutter_intensity;
 use crate::models::{BirthModel, ClutterModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::{GaussianMixture, GaussianState, innovation_likelihood};
 use crate::types::phase::{Predicted, Updated};
@@ -289,42 +290,43 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
             })
             .collect();
 
-        // Compute detection terms for each component
-        let detection_terms: Vec<T> = self
+        let predicted_mass = self.mixture.total_weight();
+        let missed_mass = self
             .mixture
             .iter()
             .enumerate()
-            .map(|(i, c)| {
-                let p_d = component_data[i].0;
-                p_d * c.weight
-            })
-            .collect();
+            .fold(T::zero(), |sum, (i, component)| {
+                sum + (T::one() - component_data[i].0) * component.weight
+            });
 
-        // Compute missed detection terms
-        let missed_detection_terms: Vec<T> = self
-            .mixture
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let p_d = component_data[i].0;
-                (T::one() - p_d) * c.weight
-            })
-            .collect();
-
-        // Compute clutter intensities
+        // Poisson clutter intensity is expressed in the same measurement
+        // coordinates as the likelihood.
         let clutter_intensities: Vec<T> = measurements
             .iter()
-            .map(|m| clutter_model.clutter_intensity(m))
+            .map(|measurement| clutter_model.clutter_intensity(measurement))
+            .collect();
+        let missed_probability = if predicted_mass > T::zero() {
+            missed_mass / predicted_mass
+        } else {
+            T::one()
+        };
+        let measurement_ratios: Vec<T> = likelihood_matrix
+            .iter()
+            .zip(&clutter_intensities)
+            .map(|(likelihoods, &clutter)| {
+                if predicted_mass <= T::zero() {
+                    return T::zero();
+                }
+                let target_likelihood = likelihoods.iter().copied().fold(T::zero(), |a, b| a + b);
+                target_likelihood / (predicted_mass * effective_clutter_intensity(clutter))
+            })
             .collect();
 
-        // Compute the CPHD update using Elementary Symmetric Functions
-        let (updated_cardinality, upsilon_factors) = update_cardinality(
+        let (updated_cardinality, cardinality_factors) = update_cardinality(
             &self.cardinality,
-            &detection_terms,
-            &missed_detection_terms,
-            &likelihood_matrix,
-            &clutter_intensities,
-            num_measurements,
+            predicted_mass,
+            missed_probability,
+            &measurement_ratios,
         );
 
         stats.max_cardinality = updated_cardinality.len().saturating_sub(1);
@@ -340,11 +342,7 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
             GaussianMixture::with_capacity(self.mixture.len() * (num_measurements + 1));
 
         // Missed detection components (weighted by cardinality-corrected factor)
-        let missed_detection_factor = if upsilon_factors.0 > T::zero() {
-            upsilon_factors.1 / upsilon_factors.0
-        } else {
-            T::one()
-        };
+        let missed_detection_factor = cardinality_factors.0;
 
         for (i, component) in self.mixture.iter().enumerate() {
             let p_d = component_data[i].0;
@@ -363,31 +361,16 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
         for (j, measurement) in measurements.iter().enumerate() {
             let clutter = clutter_intensities[j];
 
-            // Sum of detection likelihoods for this measurement
-            let detection_sum: T = likelihood_matrix[j]
-                .iter()
-                .fold(T::zero(), |acc, &x| acc + x);
-
-            // Denominator for weight normalization
-            let denom = clutter + detection_sum;
-
-            if denom <= T::zero() {
-                continue;
-            }
-
-            // Detection factor from cardinality update
-            let detection_factor = if upsilon_factors.0 > T::zero() {
-                upsilon_factors.2[j] / upsilon_factors.0
-            } else {
-                T::one()
-            };
+            let effective_clutter = effective_clutter_intensity(clutter);
+            let detection_factor = cardinality_factors.1[j];
 
             for (i, component) in self.mixture.iter().enumerate() {
                 let (_, ref predicted_meas, _, ref kalman_gain) = component_data[i];
 
                 if let Some(gain) = kalman_gain {
                     let unnormalized_weight = likelihood_matrix[j][i];
-                    let normalized_weight = (unnormalized_weight / denom) * detection_factor;
+                    let normalized_weight =
+                        (unnormalized_weight / effective_clutter) * detection_factor;
 
                     if normalized_weight > T::zero() {
                         let innovation = measurement.innovation(*predicted_meas);
@@ -675,130 +658,132 @@ fn binomial_distribution<T: RealField + Float + Copy>(n: usize, p: T, max_k: usi
     dist
 }
 
-/// Updates the cardinality distribution using the CPHD equations.
+/// Updates the cardinality distribution and PHD correction factors.
 ///
-/// Returns the updated cardinality distribution and normalization factors
-/// (upsilon_0, upsilon_1, upsilon_2[j]) for weight correction.
+/// This is the IID-cluster CPHD measurement update for Poisson clutter. The
+/// measurement ratios are `<p_D g(z|.), s> / kappa(z)`, where `s` is the
+/// normalized predicted spatial density and `kappa` is clutter intensity.
 #[cfg(feature = "alloc")]
 fn update_cardinality<T: RealField + Float + Copy>(
     cardinality: &[T],
-    detection_terms: &[T],
-    missed_detection_terms: &[T],
-    likelihood_matrix: &[Vec<T>],
-    clutter_intensities: &[T],
-    num_measurements: usize,
-) -> (Vec<T>, (T, T, Vec<T>)) {
-    // Sum of missed detection terms
-    let sum_missed: T = missed_detection_terms
-        .iter()
-        .fold(T::zero(), |acc, &x| acc + x);
-
-    // For CPHD update, we need to compute ratios of elementary symmetric functions
-    // The key insight is that weights are corrected by factors involving ESF ratios
-
-    // Compute z_i = detection_term_i for ESF computation
-    let z: Vec<T> = detection_terms.to_vec();
-
-    // Elementary symmetric functions of detection terms
-    let esf_detection = elementary_symmetric_function(&z);
-
-    // Compute inner product terms for each measurement
-    let inner_products: Vec<T> = likelihood_matrix
-        .iter()
-        .map(|row| row.iter().fold(T::zero(), |acc, &x| acc + x))
+    predicted_mass: T,
+    missed_probability: T,
+    measurement_ratios: &[T],
+) -> (Vec<T>, (T, Vec<T>)) {
+    let measurement_count = measurement_ratios.len();
+    let esf = elementary_symmetric_function(measurement_ratios);
+    let excluded_esfs: Vec<Vec<T>> = (0..measurement_count)
+        .map(|excluded| {
+            let ratios: Vec<T> = measurement_ratios
+                .iter()
+                .enumerate()
+                .filter_map(|(index, &ratio)| (index != excluded).then_some(ratio))
+                .collect();
+            elementary_symmetric_function(&ratios)
+        })
         .collect();
 
-    // Build updated cardinality distribution
-    let max_n = cardinality.len() + num_measurements;
-    let mut updated_cardinality = vec![T::zero(); max_n];
+    let mut likelihood_by_cardinality = vec![T::zero(); cardinality.len()];
+    let mut missed_numerator = T::zero();
+    let mut detection_numerators = vec![T::zero(); measurement_count];
+    let mut normalization = T::zero();
 
-    // Normalization factors for weight correction
-    let mut upsilon_0 = T::zero();
-    let mut upsilon_1 = T::zero();
-    let mut upsilon_2 = vec![T::zero(); num_measurements];
-
-    // For each possible number of targets n
     for (n, &rho_n) in cardinality.iter().enumerate() {
         if rho_n <= T::zero() {
             continue;
         }
 
-        // Compute the likelihood of observing the measurements given n targets
-        // This involves computing sums over all possible association hypotheses
-
-        // For simplicity, use the approximation from the Vo & Cantoni paper
-        // which factors the computation using ESF
-
-        // Upsilon^0_n: probability of n targets with these measurements
-        // Upsilon^1_n: for missed detection correction
-        // Upsilon^2_n[j]: for detection correction for measurement j
-
-        // Base term: contribution from missed detections
-        let missed_power = if n < esf_detection.len() {
-            esf_detection[n]
-        } else {
-            T::zero()
-        };
-
-        // Contribution to upsilon_0 (normalization)
-        let contrib_0 = rho_n * missed_power;
-        upsilon_0 += contrib_0;
-
-        // Contribution to upsilon_1 (missed detection factor)
-        if n > 0 && n - 1 < esf_detection.len() {
-            let contrib_1 = rho_n * esf_detection[n - 1] * sum_missed;
-            upsilon_1 += contrib_1;
+        let mut upsilon_zero = T::zero();
+        for (detected, &esf_term) in esf.iter().enumerate().take(n.min(measurement_count) + 1) {
+            upsilon_zero += falling_factorial::<T>(n, detected)
+                * integer_power(missed_probability, n - detected)
+                * esf_term;
         }
+        likelihood_by_cardinality[n] = upsilon_zero;
+        normalization += rho_n * upsilon_zero;
 
-        // Contribution to upsilon_2[j] (detection factor for measurement j)
-        for (j, &inner_prod) in inner_products.iter().enumerate() {
-            if n > 0 && n - 1 < esf_detection.len() {
-                let contrib_2 = rho_n * esf_detection[n - 1] * inner_prod / clutter_intensities[j];
-                upsilon_2[j] += contrib_2;
+        if n > 0 {
+            let mut upsilon_one = T::zero();
+            for (detected, &esf_term) in esf
+                .iter()
+                .enumerate()
+                .take((n - 1).min(measurement_count) + 1)
+            {
+                upsilon_one += falling_factorial::<T>(n, detected + 1)
+                    * integer_power(missed_probability, n - detected - 1)
+                    * esf_term;
             }
-        }
+            missed_numerator += rho_n * upsilon_one;
 
-        // Update cardinality distribution
-        // The number of targets after update depends on associations
-        for k in 0..=n.min(num_measurements) {
-            let n_after = n; // Number of targets doesn't change in update step
-            if n_after < updated_cardinality.len() {
-                // Weight by measurement likelihood combination
-                let factor = if k < esf_detection.len() {
-                    esf_detection[k]
-                } else {
-                    T::zero()
-                };
-                updated_cardinality[n_after] += rho_n * factor;
+            for (measurement, excluded_esf) in excluded_esfs.iter().enumerate() {
+                let mut measurement_upsilon = T::zero();
+                for (detected, &esf_term) in excluded_esf
+                    .iter()
+                    .enumerate()
+                    .take((n - 1).min(measurement_count.saturating_sub(1)) + 1)
+                {
+                    measurement_upsilon += falling_factorial::<T>(n, detected + 1)
+                        * integer_power(missed_probability, n - detected - 1)
+                        * esf_term;
+                }
+                detection_numerators[measurement] += rho_n * measurement_upsilon;
             }
         }
     }
 
-    // Normalize cardinality distribution
-    let sum: T = updated_cardinality
-        .iter()
-        .fold(T::zero(), |acc, &x| acc + x);
-    if sum > T::zero() {
-        for p in &mut updated_cardinality {
-            *p /= sum;
+    let mut updated = vec![T::zero(); cardinality.len()];
+    if normalization > T::zero() {
+        for ((updated_probability, &rho_n), &likelihood) in updated
+            .iter_mut()
+            .zip(cardinality)
+            .zip(&likelihood_by_cardinality)
+        {
+            *updated_probability = rho_n * likelihood / normalization;
         }
+    } else if !updated.is_empty() {
+        // An impossible measurement set under the supplied models should not
+        // produce NaNs. Preserve the prior as the least surprising fallback.
+        updated.copy_from_slice(cardinality);
     }
 
-    // Trim trailing near-zero entries
-    while updated_cardinality.len() > 1
-        && updated_cardinality
+    while updated.len() > 1
+        && updated
             .last()
-            .is_some_and(|&x| x < T::from_f64(1e-15).unwrap())
+            .is_some_and(|&probability| probability < T::from_f64(1e-15).unwrap())
     {
-        updated_cardinality.pop();
+        updated.pop();
     }
 
-    // Ensure upsilon_2 has correct size
-    if upsilon_2.len() < num_measurements {
-        upsilon_2.resize(num_measurements, T::zero());
-    }
+    let spatial_normalizer = predicted_mass * normalization;
+    let missed_factor = if spatial_normalizer > T::zero() {
+        missed_numerator / spatial_normalizer
+    } else {
+        T::zero()
+    };
+    let detection_factors = detection_numerators
+        .into_iter()
+        .map(|numerator| {
+            if spatial_normalizer > T::zero() {
+                numerator / spatial_normalizer
+            } else {
+                T::zero()
+            }
+        })
+        .collect();
 
-    (updated_cardinality, (upsilon_0, upsilon_1, upsilon_2))
+    (updated, (missed_factor, detection_factors))
+}
+
+#[cfg(feature = "alloc")]
+fn integer_power<T: RealField + Copy>(base: T, exponent: usize) -> T {
+    (0..exponent).fold(T::one(), |value, _| value * base)
+}
+
+#[cfg(feature = "alloc")]
+fn falling_factorial<T: RealField + Copy>(n: usize, order: usize) -> T {
+    (0..order).fold(T::one(), |value, offset| {
+        value * T::from_usize(n - offset).unwrap()
+    })
 }
 
 // ============================================================================
@@ -967,6 +952,63 @@ mod tests {
 
         // Stats should be populated
         assert_eq!(stats.singular_covariance_count, 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_empty_measurements_update_cardinality_via_missed_detections() {
+        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let observation = PositionSensor2D::new(1.0, 0.5);
+        let birth = FixedBirthModel::<f64, 4>::new();
+        let initial = CphdFilterState::from_mixture_and_cardinality(
+            GaussianMixture::from_components(vec![GaussianState::new(
+                1.4,
+                StateVector::from_array([10.0, 10.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            )]),
+            vec![0.1, 0.4, 0.5],
+        );
+        let prior_expected = initial.expected_target_count();
+        let predicted = initial.predict(&transition, &birth, 0.0);
+        let updated = predicted.update(
+            &[],
+            &observation,
+            &UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0)),
+        );
+
+        assert!(updated.expected_target_count() < prior_expected);
+        assert!((updated.cardinality[2] / updated.cardinality[1] - 0.625).abs() < 1e-12);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_measurement_location_changes_updated_cardinality() {
+        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let observation = PositionSensor2D::new(1.0, 0.8);
+        let clutter = UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0));
+        let birth = FixedBirthModel::<f64, 4>::new();
+        let initial = CphdFilterState::from_mixture_and_cardinality(
+            GaussianMixture::from_components(vec![GaussianState::new(
+                1.0,
+                StateVector::from_array([10.0, 10.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            )]),
+            vec![0.2, 0.8],
+        );
+        let predicted = initial.predict(&transition, &birth, 0.0);
+
+        let near = predicted.clone().update(
+            &[Measurement::from_array([10.0, 10.0])],
+            &observation,
+            &clutter,
+        );
+        let far = predicted.update(
+            &[Measurement::from_array([90.0, 90.0])],
+            &observation,
+            &clutter,
+        );
+
+        assert!(near.cardinality[1] > far.cardinality[1]);
     }
 
     #[cfg(feature = "alloc")]

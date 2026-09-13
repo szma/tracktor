@@ -4,8 +4,8 @@
 
 mod common;
 
-use common::{make_glmb_track, make_measurement, NoGlmbBirthModel, TestGlmbBirthModel};
-use tracktor::filters::glmb::{extract_best_hypothesis, extract_map_cardinality, GlmbFilter};
+use common::{NoGlmbBirthModel, TestGlmbBirthModel, make_glmb_track, make_measurement};
+use tracktor::filters::glmb::{GlmbFilter, extract_best_hypothesis, extract_map_cardinality};
 use tracktor::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
 use tracktor::types::labels::Label;
 use tracktor::types::spaces::Measurement;
@@ -296,7 +296,7 @@ fn test_glmb_crossing_targets() {
 
     // Two targets that cross
     let initial_tracks = vec![
-        make_glmb_track(Label::new(0, 0), 50.0, 100.0, 10.0, 0.0),  // Moving right
+        make_glmb_track(Label::new(0, 0), 50.0, 100.0, 10.0, 0.0), // Moving right
         make_glmb_track(Label::new(0, 1), 150.0, 100.0, -10.0, 0.0), // Moving left
     ];
     let mut state = filter.initial_state_from(initial_tracks);

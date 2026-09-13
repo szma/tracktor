@@ -189,7 +189,7 @@ where
         let r = self.observation.measurement_noise();
 
         // Innovation
-        let innovation = measurement.innovation(predicted_meas);
+        let innovation = self.observation.innovation(measurement, &predicted_meas);
 
         // Innovation covariance: S = H * P * H^T + R
         let innovation_cov = compute_innovation_covariance(&state.covariance, &h, &r);
@@ -250,7 +250,7 @@ where
         let predicted_meas = self.observation.observe(&state.mean);
 
         // Innovation
-        let innovation = measurement.innovation(predicted_meas);
+        let innovation = self.observation.innovation(measurement, &predicted_meas);
 
         // Innovation covariance
         let innovation_cov = compute_innovation_covariance(&state.covariance, &h, &r);
@@ -279,7 +279,7 @@ where
         let predicted_meas = self.observation.observe(&state.mean);
 
         // Innovation
-        let innovation = measurement.innovation(predicted_meas);
+        let innovation = self.observation.innovation(measurement, &predicted_meas);
 
         // Innovation covariance
         let innovation_cov = compute_innovation_covariance(&state.covariance, &h, &r);
@@ -358,7 +358,7 @@ where
         let predicted_meas = self.observation.observe(&state.mean);
         let r = self.observation.measurement_noise();
 
-        let innovation = measurement.innovation(predicted_meas);
+        let innovation = self.observation.innovation(measurement, &predicted_meas);
         let innovation_cov = compute_innovation_covariance(&state.covariance, &h, &r);
         let kalman_gain = compute_kalman_gain(&state.covariance, &h, &innovation_cov)?;
 
@@ -628,6 +628,23 @@ mod tests {
             .unwrap();
 
         assert!(close_dist < far_dist);
+    }
+
+    #[test]
+    fn test_ekf_wraps_bearing_across_branch_cut() {
+        let transition = CoordinatedTurn2D::new(0.1_f64, 0.01, 0.99);
+        let sensor = RangeBearingSensor5D::new(1.0, 0.1, 0.95);
+        let filter = ExtendedKalmanFilter::new(transition, sensor);
+        let state = EkfState::new(
+            StateVector::from_array([-100.0, 0.1, 0.0, 0.0, 0.0]),
+            StateCovariance::identity(),
+        );
+        let measurement = Measurement::from_array([100.0, -core::f64::consts::PI + 0.001]);
+
+        let distance = filter
+            .mahalanobis_distance_squared(&state, &measurement)
+            .unwrap();
+        assert!(distance < 1.0, "wrapped distance was {distance}");
     }
 
     #[test]

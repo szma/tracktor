@@ -9,7 +9,9 @@
 use nalgebra::RealField;
 use num_traits::Float;
 
-use crate::types::spaces::{Measurement, MeasurementCovariance, StateVector};
+use crate::types::spaces::{
+    ComputeInnovation, Innovation, Measurement, MeasurementCovariance, StateVector,
+};
 use crate::types::transforms::ObservationMatrix;
 
 /// Trait for linear observation models.
@@ -49,18 +51,21 @@ pub trait ObservationModel<T: RealField, const N: usize, const M: usize> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Range-bearing sensor
-/// let sensor = RangeBearingSensor::new(sigma_range, sigma_bearing, p_detection);
+/// ```no_run
+/// use tracktor::prelude::*;
+///
+/// let sensor = RangeBearingSensor::new(1.0, 0.01, 0.9);
+/// let predicted_state = StateVector::<f64, 4>::from_array([100.0, 200.0, 1.0, 0.5]);
 ///
 /// // Get predicted measurement
 /// let z_pred = sensor.observe(&predicted_state);
 ///
 /// // Get Jacobian for linearization
-/// let H = sensor.jacobian_at(&predicted_state)?;
+/// let h = sensor.jacobian_at(&predicted_state).unwrap();
 ///
 /// // Innovation is computed in measurement space
-/// let innovation = z_measured - z_pred;
+/// let z_measured = Measurement::<f64, 2>::from_array([224.0, 1.1]);
+/// let innovation = z_measured.innovation(z_pred);
 /// ```
 pub trait NonlinearObservationModel<T: RealField, const N: usize, const M: usize> {
     /// Applies the nonlinear observation function: z = h(x)
@@ -81,6 +86,43 @@ pub trait NonlinearObservationModel<T: RealField, const N: usize, const M: usize
     ///
     /// This may depend on the target state (e.g., reduced detection at range).
     fn detection_probability(&self, state: &StateVector<T, N>) -> T;
+
+    /// Computes a measurement residual using this sensor's coordinate topology.
+    ///
+    /// The default is ordinary Euclidean subtraction. Sensors with periodic
+    /// coordinates must override this method.
+    fn innovation(
+        &self,
+        measurement: &Measurement<T, M>,
+        predicted: &Measurement<T, M>,
+    ) -> Innovation<T, M>
+    where
+        T: Copy,
+    {
+        (*measurement).innovation(*predicted)
+    }
+
+    /// Computes a weighted measurement mean using this sensor's coordinate topology.
+    ///
+    /// `measurements` and `weights` must have the same non-zero length. The
+    /// weights are the UKF mean weights and therefore may be negative.
+    fn measurement_mean(
+        &self,
+        measurements: &[Measurement<T, M>],
+        weights: &[T],
+    ) -> Measurement<T, M>
+    where
+        T: Copy,
+    {
+        assert_eq!(measurements.len(), weights.len());
+        assert!(!measurements.is_empty());
+
+        let mut mean = measurements[0].as_svector().scale(weights[0]);
+        for (measurement, &weight) in measurements.iter().zip(weights).skip(1) {
+            mean += measurement.as_svector().scale(weight);
+        }
+        Measurement::from_svector(mean)
+    }
 }
 
 // ============================================================================
@@ -425,7 +467,6 @@ impl<T: RealField + Float + Copy> RangeBearingSensor<T> {
             -dy / r_sq, dx / r_sq, zero, zero
         ]))
     }
-
 }
 
 impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 4, 2> for RangeBearingSensor<T> {
@@ -446,6 +487,37 @@ impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 4, 2> for RangeBe
 
     fn detection_probability(&self, state: &StateVector<T, 4>) -> T {
         RangeBearingSensor::detection_probability(self, state)
+    }
+
+    fn innovation(
+        &self,
+        measurement: &Measurement<T, 2>,
+        predicted: &Measurement<T, 2>,
+    ) -> Innovation<T, 2> {
+        let range = *measurement.index(0) - *predicted.index(0);
+        let raw_bearing = *measurement.index(1) - *predicted.index(1);
+        let bearing = Float::atan2(Float::sin(raw_bearing), Float::cos(raw_bearing));
+        Innovation::from_array([range, bearing])
+    }
+
+    fn measurement_mean(
+        &self,
+        measurements: &[Measurement<T, 2>],
+        weights: &[T],
+    ) -> Measurement<T, 2> {
+        assert_eq!(measurements.len(), weights.len());
+        assert!(!measurements.is_empty());
+
+        let mut range = T::zero();
+        let mut sin_sum = T::zero();
+        let mut cos_sum = T::zero();
+        for (measurement, &weight) in measurements.iter().zip(weights) {
+            range += weight * *measurement.index(0);
+            let bearing = *measurement.index(1);
+            sin_sum += weight * Float::sin(bearing);
+            cos_sum += weight * Float::cos(bearing);
+        }
+        Measurement::from_array([range, Float::atan2(sin_sum, cos_sum)])
     }
 }
 
@@ -550,6 +622,30 @@ impl<T: RealField + Float + Copy> NonlinearObservationModel<T, 5, 2> for RangeBe
     fn detection_probability(&self, state: &StateVector<T, 5>) -> T {
         RangeBearingSensor5D::detection_probability(self, state)
     }
+
+    fn innovation(
+        &self,
+        measurement: &Measurement<T, 2>,
+        predicted: &Measurement<T, 2>,
+    ) -> Innovation<T, 2> {
+        <RangeBearingSensor<T> as NonlinearObservationModel<T, 4, 2>>::innovation(
+            &self.inner,
+            measurement,
+            predicted,
+        )
+    }
+
+    fn measurement_mean(
+        &self,
+        measurements: &[Measurement<T, 2>],
+        weights: &[T],
+    ) -> Measurement<T, 2> {
+        <RangeBearingSensor<T> as NonlinearObservationModel<T, 4, 2>>::measurement_mean(
+            &self.inner,
+            measurements,
+            weights,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -601,6 +697,36 @@ mod tests {
         assert!((jacobian.as_matrix()[(0, 1)] - 0.0).abs() < 1e-10);
         assert!((jacobian.as_matrix()[(1, 0)] - 0.0).abs() < 1e-10);
         assert!((jacobian.as_matrix()[(1, 1)] - 0.1).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_range_bearing_wraps_innovation_at_branch_cut() {
+        let sensor = RangeBearingSensor::new(1.0_f64, 0.01, 0.9);
+        let measured = Measurement::from_array([10.0, -core::f64::consts::PI + 0.01]);
+        let predicted = Measurement::from_array([10.0, core::f64::consts::PI - 0.01]);
+        let innovation =
+            <RangeBearingSensor<f64> as NonlinearObservationModel<f64, 4, 2>>::innovation(
+                &sensor, &measured, &predicted,
+            );
+
+        assert!((innovation.index(1) - 0.02).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_range_bearing_uses_circular_measurement_mean() {
+        let sensor = RangeBearingSensor::new(1.0_f64, 0.01, 0.9);
+        let measurements = [
+            Measurement::from_array([10.0, core::f64::consts::PI - 0.1]),
+            Measurement::from_array([10.0, -core::f64::consts::PI + 0.1]),
+        ];
+        let mean =
+            <RangeBearingSensor<f64> as NonlinearObservationModel<f64, 4, 2>>::measurement_mean(
+                &sensor,
+                &measurements,
+                &[0.5, 0.5],
+            );
+
+        assert!((mean.index(1).abs() - core::f64::consts::PI).abs() < 1e-12);
     }
 
     #[test]
