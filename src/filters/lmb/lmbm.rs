@@ -14,7 +14,7 @@
 //!   3460-3475.
 
 use core::marker::PhantomData;
-use nalgebra::{ComplexField, RealField};
+use nalgebra::RealField;
 use num_traits::Float;
 
 #[cfg(feature = "alloc")]
@@ -32,6 +32,33 @@ use crate::types::transforms::{compute_innovation_covariance, compute_kalman_gai
 // ============================================================================
 // LMBM Filter State
 // ============================================================================
+
+#[cfg(feature = "alloc")]
+fn negative_log_ratio_cost<T: RealField + Float + Copy>(
+    numerator_factors: &[T],
+    denominator: T,
+    fallback: f64,
+) -> f64 {
+    if denominator <= T::zero() || numerator_factors.iter().any(|&factor| factor <= T::zero()) {
+        return fallback;
+    }
+
+    let log_ratio = numerator_factors
+        .iter()
+        .fold(T::zero(), |sum, &factor| sum + Float::ln(factor))
+        - Float::ln(denominator);
+    let cost = -log_ratio;
+    if Float::is_finite(cost) {
+        cost.to_subset().unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn negative_log_probability<T: RealField + Float + Copy>(probability: T, fallback: f64) -> f64 {
+    negative_log_ratio_cost(&[probability], T::one(), fallback)
+}
 
 /// The state of an LMBM filter at a particular phase.
 ///
@@ -176,27 +203,52 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
         for hypothesis in &self.state.hypotheses {
             let n_tracks = hypothesis.tracks.len();
 
-            if n_tracks == 0 || n_meas == 0 {
-                // No tracks or no measurements - apply miss detection
-                let mut updated_tracks = Vec::with_capacity(n_tracks);
-                for track in &hypothesis.tracks {
-                    let p_d = observation_model.detection_probability(&track.state.mean);
-                    let r_updated = super::updaters::existence_update_miss(track.existence, p_d);
-                    updated_tracks.push(BernoulliTrack {
-                        label: track.label,
-                        existence: r_updated,
-                        state: track.state.clone(),
-                    });
-                }
-                new_hypotheses.push(LmbmHypothesis {
-                    log_weight: hypothesis.log_weight,
-                    tracks: updated_tracks,
-                });
+            if n_tracks == 0 {
+                new_hypotheses.push(hypothesis.clone());
                 continue;
             }
 
-            // Compute cost matrix and posteriors
-            let mut cost_matrix = crate::assignment::CostMatrix::zeros(n_tracks, n_meas);
+            if n_meas == 0 {
+                // The only event is that every Bernoulli produces no
+                // detection. Its probability and each conditional existence
+                // must both be reflected in the resulting hypothesis.
+                let mut updated_tracks = Vec::with_capacity(n_tracks);
+                let mut log_weight_delta = T::zero();
+                let mut possible = true;
+                for track in &hypothesis.tracks {
+                    let p_d = observation_model.detection_probability(&track.state.mean);
+                    let miss_probability = T::one() - track.existence * p_d;
+                    if miss_probability <= T::zero() {
+                        possible = false;
+                        break;
+                    }
+                    log_weight_delta += Float::ln(miss_probability);
+                    updated_tracks.push(BernoulliTrack {
+                        label: track.label,
+                        existence: super::updaters::existence_update_miss(track.existence, p_d),
+                        state: track.state.clone(),
+                    });
+                }
+                if possible {
+                    new_hypotheses.push(LmbmHypothesis {
+                        log_weight: hypothesis.log_weight + log_weight_delta,
+                        tracks: updated_tracks,
+                    });
+                }
+                continue;
+            }
+
+            // Each track chooses either a shared measurement column or its
+            // own private miss column. This makes misses explicit even for
+            // square track/measurement inputs while preserving measurement
+            // exclusivity through the assignment solver.
+            let miss_column_offset = n_meas;
+            let forbidden_cost = 1e20_f64;
+            let mut cost_matrix = crate::assignment::CostMatrix::filled(
+                n_tracks,
+                n_meas + n_tracks,
+                forbidden_cost,
+            );
             let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
             let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
 
@@ -218,22 +270,12 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                         innovation_cov.as_matrix(),
                     );
 
-                    // Cost = -log(likelihood * p_d / kappa)
+                    // A detection event has probability
+                    // r * p_d * L(z|x) / kappa(z). Form its cost as a
+                    // difference of logs so the quotient cannot overflow.
                     let kappa =
                         effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
-                    let cost = if likelihood > T::zero() {
-                        let ratio = likelihood * p_d / kappa;
-                        if ratio > T::zero() {
-                            -ComplexField::ln(ratio).to_subset().unwrap_or(0.0)
-                        } else {
-                            1e10
-                        }
-                    } else {
-                        1e10
-                    };
-                    cost_matrix.set(i, j, cost);
 
-                    // Compute posterior
                     if let Some(kalman_gain) =
                         compute_kalman_gain(&track.state.covariance, &obs_matrix, &innovation_cov)
                     {
@@ -248,76 +290,89 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                             &meas_noise,
                         );
                         posteriors.set(i, j, (updated_mean, updated_cov, likelihood));
+                        cost_matrix.set(
+                            i,
+                            j,
+                            negative_log_ratio_cost(
+                                &[track.existence, p_d, likelihood],
+                                kappa,
+                                forbidden_cost,
+                            ),
+                        );
                     } else {
                         stats.singular_covariance_count += 1;
                     }
                 }
+
+                let miss_probability = T::one() - track.existence * p_d;
+                cost_matrix.set(
+                    i,
+                    miss_column_offset + i,
+                    negative_log_probability(miss_probability, forbidden_cost),
+                );
             }
 
             // Generate k-best assignments using Murty's algorithm
             let assignments = generate_k_best_assignments(&cost_matrix, k_best);
 
-            // Create new hypotheses from assignments
+            // Create new hypotheses from semantically valid assignments.
+            // Murty may eventually enumerate a forbidden private-column or
+            // zero-probability event; those are matrix padding, not events.
             for (assignment, cost) in assignments {
                 let mut updated_tracks = Vec::with_capacity(n_tracks);
-                let mut log_weight_delta = T::zero();
+                let mut valid = true;
 
                 for (i, track) in hypothesis.tracks.iter().enumerate() {
-                    let assigned_meas = assignment.get(i).copied().flatten();
                     let p_d = detection_probs[i];
+                    let Some(column) = assignment.get(i).copied().flatten() else {
+                        valid = false;
+                        break;
+                    };
 
-                    // Minimum value for ln() to prevent -infinity
-                    let ln_min = T::from_f64(1e-300).unwrap();
-
-                    let (updated_state, r_updated) = if let Some(j) = assigned_meas {
-                        // Detection
-                        if let Some((mean, cov, likelihood)) = posteriors.get(i, j) {
-                            let r_updated = super::updaters::existence_update_detection(
-                                track.existence,
-                                p_d,
-                                *likelihood,
-                            );
-                            // Guard against ln(0) when likelihood is zero
-                            let safe_likelihood = if *likelihood > ln_min {
-                                *likelihood
-                            } else {
-                                ln_min
-                            };
-                            log_weight_delta += ComplexField::ln(safe_likelihood);
-                            (GaussianState::new(T::one(), *mean, *cov), r_updated)
-                        } else {
-                            (track.state.clone(), track.existence)
-                        }
-                    } else {
-                        // Miss detection
-                        let r_updated =
-                            super::updaters::existence_update_miss(track.existence, p_d);
-                        // Guard against ln(0) when p_d is close to 1.0
-                        let one_minus_pd = T::one() - p_d;
-                        let safe_one_minus_pd = if one_minus_pd > ln_min {
-                            one_minus_pd
-                        } else {
-                            ln_min
+                    let (updated_state, existence) = if column < n_meas {
+                        let Some((mean, cov, likelihood)) = posteriors.get(i, column) else {
+                            valid = false;
+                            break;
                         };
-                        log_weight_delta += ComplexField::ln(safe_one_minus_pd);
-                        (track.state.clone(), r_updated)
+                        if track.existence <= T::zero()
+                            || p_d <= T::zero()
+                            || *likelihood <= T::zero()
+                        {
+                            valid = false;
+                            break;
+                        }
+
+                        // Conditioning on this detection event proves that the
+                        // Bernoulli exists.
+                        (GaussianState::new(T::one(), *mean, *cov), T::one())
+                    } else if column == miss_column_offset + i {
+                        let miss_probability = T::one() - track.existence * p_d;
+                        if miss_probability <= T::zero() {
+                            valid = false;
+                            break;
+                        }
+                        (
+                            track.state.clone(),
+                            super::updaters::existence_update_miss(track.existence, p_d),
+                        )
+                    } else {
+                        valid = false;
+                        break;
                     };
 
                     updated_tracks.push(BernoulliTrack {
                         label: track.label,
-                        existence: r_updated,
+                        existence,
                         state: updated_state,
                     });
                 }
 
-                // Compute hypothesis weight
-                let new_log_weight =
-                    hypothesis.log_weight + log_weight_delta - T::from(cost).unwrap();
-
-                new_hypotheses.push(LmbmHypothesis {
-                    log_weight: new_log_weight,
-                    tracks: updated_tracks,
-                });
+                if valid {
+                    new_hypotheses.push(LmbmHypothesis {
+                        log_weight: hypothesis.log_weight - T::from(cost).unwrap(),
+                        tracks: updated_tracks,
+                    });
+                }
             }
         }
 
@@ -545,18 +600,18 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
-    fn test_out_of_support_clutter_still_allows_lmbm_target_association() {
+    fn test_out_of_support_clutter_still_allows_lmbm_target_association_f32() {
         use crate::filters::lmb::NoBirthModel;
         use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
         use crate::types::spaces::StateCovariance;
 
         let track = BernoulliTrack::new(
             Label::new(0, 0),
-            0.9,
+            0.9_f32,
             GaussianState::new(
                 1.0,
                 StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
-                StateCovariance::identity(),
+                StateCovariance::identity().scale(1.0e-8),
             ),
         );
         let predicted = LmbmFilterState::from_hypotheses(vec![LmbmHypothesis::new(
@@ -569,7 +624,7 @@ mod tests {
                 Measurement::from_array([20.0, 20.0]),
                 Measurement::from_array([5.0, 5.0]),
             ],
-            &PositionSensor2D::new(1.0, 0.9),
+            &PositionSensor2D::new(1.0e-8, 0.9),
             &UniformClutter2D::new(1.0, (0.0, 10.0), (0.0, 10.0)),
             2,
             2,
@@ -577,6 +632,69 @@ mod tests {
 
         let best = extract_best_hypothesis(&updated).unwrap();
         assert!(*best.tracks[0].state.mean.index(0) > 18.0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_detection_hypothesis_odds_include_likelihood_once() {
+        use crate::models::{PositionSensor2D, UniformClutter2D};
+        use crate::types::spaces::StateCovariance;
+
+        let tracks = vec![
+            BernoulliTrack::new(
+                Label::new(0, 0),
+                0.8,
+                GaussianState::new(
+                    1.0,
+                    StateVector::from_array([0.0_f64, 0.0, 0.0, 0.0]),
+                    StateCovariance::identity(),
+                ),
+            ),
+            BernoulliTrack::new(
+                Label::new(0, 1),
+                0.8,
+                GaussianState::new(
+                    1.0,
+                    StateVector::from_array([2.0_f64, 0.0, 0.0, 0.0]),
+                    StateCovariance::identity(),
+                ),
+            ),
+        ];
+        let predicted = LmbmFilterState::<f64, 4, Predicted> {
+            state: LmbmState {
+                hypotheses: vec![LmbmHypothesis::new(0.0, tracks)],
+            },
+            label_gen: LabelGenerator::new(),
+            time_step: 0,
+            _phase: PhantomData,
+        };
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([0.0, 0.0])],
+            &PositionSensor2D::new(1.0, 0.5),
+            &UniformClutter2D::new(1.0, (-5.0, 5.0), (-5.0, 5.0)),
+            2,
+            2,
+        );
+
+        assert_eq!(updated.state.hypotheses.len(), 2);
+        let mut assigned_track_zero_weight = None;
+        let mut assigned_track_one_weight = None;
+        for hypothesis in &updated.state.hypotheses {
+            let track_zero_was_updated =
+                hypothesis.tracks[0].state.covariance.as_matrix()[(0, 0)] < 0.75;
+            if track_zero_was_updated {
+                assigned_track_zero_weight = Some(hypothesis.log_weight);
+            } else {
+                assert!(hypothesis.tracks[1].state.covariance.as_matrix()[(0, 0)] < 0.75);
+                assigned_track_one_weight = Some(hypothesis.log_weight);
+            }
+        }
+
+        // Both alternatives have the same p_d, clutter, and missed-detection
+        // factors. With innovation covariance 2I and innovations 0 and [2, 0],
+        // ln(L_0 / L_1) is exactly 1. A duplicate likelihood term makes this 2.
+        let log_odds = assigned_track_zero_weight.unwrap() - assigned_track_one_weight.unwrap();
+        assert!((log_odds - 1.0).abs() < 1.0e-12);
     }
 
     #[cfg(feature = "alloc")]
