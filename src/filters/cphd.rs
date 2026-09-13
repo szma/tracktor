@@ -17,7 +17,6 @@ use alloc::vec;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 
-use crate::filters::lmb::cardinality::elementary_symmetric_function;
 use crate::models::effective_clutter_intensity;
 use crate::models::{BirthModel, ClutterModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::{GaussianMixture, GaussianState, innovation_likelihood};
@@ -310,15 +309,25 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
         } else {
             T::one()
         };
-        let measurement_ratios: Vec<T> = likelihood_matrix
+        // Keep likelihood-to-clutter ratios in the log domain. Computing the
+        // quotient directly can overflow even though the normalized CPHD update
+        // is finite (notably when several measurements have near-zero clutter).
+        let log_measurement_ratios: Vec<T> = likelihood_matrix
             .iter()
             .zip(&clutter_intensities)
             .map(|(likelihoods, &clutter)| {
-                if predicted_mass <= T::zero() {
-                    return T::zero();
-                }
                 let target_likelihood = likelihoods.iter().copied().fold(T::zero(), |a, b| a + b);
-                target_likelihood / (predicted_mass * effective_clutter_intensity(clutter))
+                let effective_clutter = effective_clutter_intensity(clutter);
+                if target_likelihood > T::zero()
+                    && predicted_mass > T::zero()
+                    && effective_clutter > T::zero()
+                {
+                    Float::ln(target_likelihood)
+                        - Float::ln(predicted_mass)
+                        - Float::ln(effective_clutter)
+                } else {
+                    T::neg_infinity()
+                }
             })
             .collect();
 
@@ -326,7 +335,7 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
             &self.cardinality,
             predicted_mass,
             missed_probability,
-            &measurement_ratios,
+            &log_measurement_ratios,
         );
 
         stats.max_cardinality = updated_cardinality.len().saturating_sub(1);
@@ -342,13 +351,18 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
             GaussianMixture::with_capacity(self.mixture.len() * (num_measurements + 1));
 
         // Missed detection components (weighted by cardinality-corrected factor)
-        let missed_detection_factor = cardinality_factors.0;
+        let log_missed_detection_factor = cardinality_factors.0;
 
         for (i, component) in self.mixture.iter().enumerate() {
             let p_d = component_data[i].0;
-            let missed_weight = component.weight * (T::one() - p_d) * missed_detection_factor;
+            let unnormalized_weight = component.weight * (T::one() - p_d);
+            let missed_weight = if unnormalized_weight > T::zero() {
+                Float::exp(Float::ln(unnormalized_weight) + log_missed_detection_factor)
+            } else {
+                T::zero()
+            };
 
-            if missed_weight > T::zero() {
+            if missed_weight > T::zero() && Float::is_finite(missed_weight) {
                 updated.push(GaussianState {
                     weight: missed_weight,
                     mean: component.mean,
@@ -357,12 +371,12 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
             }
         }
 
-        // Detection components
+        // Detection components. Combining the likelihood, clutter intensity,
+        // and CPHD factor in logs avoids an overflowing likelihood/clutter
+        // quotient followed by multiplication by a tiny correction factor.
         for (j, measurement) in measurements.iter().enumerate() {
-            let clutter = clutter_intensities[j];
-
-            let effective_clutter = effective_clutter_intensity(clutter);
-            let detection_factor = cardinality_factors.1[j];
+            let effective_clutter = effective_clutter_intensity(clutter_intensities[j]);
+            let log_detection_factor = cardinality_factors.1[j];
 
             for (i, component) in self.mixture.iter().enumerate() {
                 let (_, ref predicted_meas, _, ref kalman_gain) = component_data[i];
@@ -370,9 +384,16 @@ impl<T: RealField + Float + Copy, const N: usize> CphdFilterState<T, N, Predicte
                 if let Some(gain) = kalman_gain {
                     let unnormalized_weight = likelihood_matrix[j][i];
                     let normalized_weight =
-                        (unnormalized_weight / effective_clutter) * detection_factor;
+                        if unnormalized_weight > T::zero() && effective_clutter > T::zero() {
+                            Float::exp(
+                                Float::ln(unnormalized_weight) - Float::ln(effective_clutter)
+                                    + log_detection_factor,
+                            )
+                        } else {
+                            T::zero()
+                        };
 
-                    if normalized_weight > T::zero() {
+                    if normalized_weight > T::zero() && Float::is_finite(normalized_weight) {
                         let innovation = measurement.innovation(*predicted_meas);
                         let correction = gain.correct(&innovation);
                         let updated_mean = StateVector::from_svector(
@@ -658,87 +679,84 @@ fn binomial_distribution<T: RealField + Float + Copy>(n: usize, p: T, max_k: usi
     dist
 }
 
-/// Updates the cardinality distribution and PHD correction factors.
+/// Updates the cardinality distribution and logarithmic PHD correction factors.
 ///
 /// This is the IID-cluster CPHD measurement update for Poisson clutter. The
-/// measurement ratios are `<p_D g(z|.), s> / kappa(z)`, where `s` is the
+/// inputs are the logarithms of `<p_D g(z|.), s> / kappa(z)`, where `s` is the
 /// normalized predicted spatial density and `kappa` is clutter intensity.
+/// Keeping both elementary-symmetric functions and upsilon sums in log space
+/// prevents products of several large ratios from overflowing.
 #[cfg(feature = "alloc")]
 fn update_cardinality<T: RealField + Float + Copy>(
     cardinality: &[T],
     predicted_mass: T,
     missed_probability: T,
-    measurement_ratios: &[T],
+    log_measurement_ratios: &[T],
 ) -> (Vec<T>, (T, Vec<T>)) {
-    let measurement_count = measurement_ratios.len();
-    let esf = elementary_symmetric_function(measurement_ratios);
-    let excluded_esfs: Vec<Vec<T>> = (0..measurement_count)
+    let measurement_count = log_measurement_ratios.len();
+    let log_esf = log_elementary_symmetric_function(log_measurement_ratios);
+    let excluded_log_esfs: Vec<Vec<T>> = (0..measurement_count)
         .map(|excluded| {
-            let ratios: Vec<T> = measurement_ratios
+            let ratios: Vec<T> = log_measurement_ratios
                 .iter()
                 .enumerate()
                 .filter_map(|(index, &ratio)| (index != excluded).then_some(ratio))
                 .collect();
-            elementary_symmetric_function(&ratios)
+            log_elementary_symmetric_function(&ratios)
         })
         .collect();
 
-    let mut likelihood_by_cardinality = vec![T::zero(); cardinality.len()];
-    let mut missed_numerator = T::zero();
-    let mut detection_numerators = vec![T::zero(); measurement_count];
-    let mut normalization = T::zero();
+    let log_zero = T::neg_infinity();
+    let mut log_likelihood_by_cardinality = vec![log_zero; cardinality.len()];
+    let mut log_missed_numerator = log_zero;
+    let mut log_detection_numerators = vec![log_zero; measurement_count];
+    let mut log_normalization = log_zero;
 
     for (n, &rho_n) in cardinality.iter().enumerate() {
         if rho_n <= T::zero() {
             continue;
         }
 
-        let mut upsilon_zero = T::zero();
-        for (detected, &esf_term) in esf.iter().enumerate().take(n.min(measurement_count) + 1) {
-            upsilon_zero += falling_factorial::<T>(n, detected)
-                * integer_power(missed_probability, n - detected)
-                * esf_term;
-        }
-        likelihood_by_cardinality[n] = upsilon_zero;
-        normalization += rho_n * upsilon_zero;
+        let log_rho_n = Float::ln(rho_n);
+        let log_upsilon_zero = log_upsilon(n, 0, missed_probability, &log_esf);
+        log_likelihood_by_cardinality[n] = log_upsilon_zero;
+        log_normalization = log_add_exp(log_normalization, log_rho_n + log_upsilon_zero);
 
         if n > 0 {
-            let mut upsilon_one = T::zero();
-            for (detected, &esf_term) in esf
-                .iter()
-                .enumerate()
-                .take((n - 1).min(measurement_count) + 1)
-            {
-                upsilon_one += falling_factorial::<T>(n, detected + 1)
-                    * integer_power(missed_probability, n - detected - 1)
-                    * esf_term;
-            }
-            missed_numerator += rho_n * upsilon_one;
+            let log_upsilon_one = log_upsilon(n, 1, missed_probability, &log_esf);
+            log_missed_numerator = log_add_exp(log_missed_numerator, log_rho_n + log_upsilon_one);
 
-            for (measurement, excluded_esf) in excluded_esfs.iter().enumerate() {
-                let mut measurement_upsilon = T::zero();
-                for (detected, &esf_term) in excluded_esf
-                    .iter()
-                    .enumerate()
-                    .take((n - 1).min(measurement_count.saturating_sub(1)) + 1)
-                {
-                    measurement_upsilon += falling_factorial::<T>(n, detected + 1)
-                        * integer_power(missed_probability, n - detected - 1)
-                        * esf_term;
-                }
-                detection_numerators[measurement] += rho_n * measurement_upsilon;
+            for (measurement, excluded_log_esf) in excluded_log_esfs.iter().enumerate() {
+                let log_measurement_upsilon =
+                    log_upsilon(n, 1, missed_probability, excluded_log_esf);
+                log_detection_numerators[measurement] = log_add_exp(
+                    log_detection_numerators[measurement],
+                    log_rho_n + log_measurement_upsilon,
+                );
             }
         }
     }
 
     let mut updated = vec![T::zero(); cardinality.len()];
-    if normalization > T::zero() {
-        for ((updated_probability, &rho_n), &likelihood) in updated
+    if Float::is_finite(log_normalization) {
+        for ((updated_probability, &rho_n), &log_likelihood) in updated
             .iter_mut()
             .zip(cardinality)
-            .zip(&likelihood_by_cardinality)
+            .zip(&log_likelihood_by_cardinality)
         {
-            *updated_probability = rho_n * likelihood / normalization;
+            if rho_n > T::zero() && log_likelihood != log_zero {
+                *updated_probability =
+                    Float::exp(Float::ln(rho_n) + log_likelihood - log_normalization);
+            }
+        }
+
+        // Remove the small rounding drift introduced by exponentiating the
+        // normalized log probabilities.
+        let probability_sum = updated.iter().copied().fold(T::zero(), |sum, p| sum + p);
+        if probability_sum > T::zero() && Float::is_finite(probability_sum) {
+            for probability in &mut updated {
+                *probability /= probability_sum;
+            }
         }
     } else if !updated.is_empty() {
         // An impossible measurement set under the supplied models should not
@@ -754,36 +772,98 @@ fn update_cardinality<T: RealField + Float + Copy>(
         updated.pop();
     }
 
-    let spatial_normalizer = predicted_mass * normalization;
-    let missed_factor = if spatial_normalizer > T::zero() {
-        missed_numerator / spatial_normalizer
-    } else {
-        T::zero()
-    };
-    let detection_factors = detection_numerators
+    let log_spatial_normalizer =
+        if predicted_mass > T::zero() && Float::is_finite(log_normalization) {
+            Float::ln(predicted_mass) + log_normalization
+        } else {
+            T::infinity()
+        };
+    let log_missed_factor =
+        if log_missed_numerator != log_zero && Float::is_finite(log_spatial_normalizer) {
+            log_missed_numerator - log_spatial_normalizer
+        } else {
+            log_zero
+        };
+    let log_detection_factors = log_detection_numerators
         .into_iter()
-        .map(|numerator| {
-            if spatial_normalizer > T::zero() {
-                numerator / spatial_normalizer
+        .map(|log_numerator| {
+            if log_numerator != log_zero && Float::is_finite(log_spatial_normalizer) {
+                log_numerator - log_spatial_normalizer
             } else {
-                T::zero()
+                log_zero
             }
         })
         .collect();
 
-    (updated, (missed_factor, detection_factors))
+    (updated, (log_missed_factor, log_detection_factors))
 }
 
 #[cfg(feature = "alloc")]
-fn integer_power<T: RealField + Copy>(base: T, exponent: usize) -> T {
-    (0..exponent).fold(T::one(), |value, _| value * base)
+fn log_elementary_symmetric_function<T: RealField + Float + Copy>(log_values: &[T]) -> Vec<T> {
+    let log_zero = T::neg_infinity();
+    let mut log_esf = vec![log_zero; log_values.len() + 1];
+    log_esf[0] = T::zero();
+
+    for (index, &log_value) in log_values.iter().enumerate() {
+        for order in (1..=index + 1).rev() {
+            log_esf[order] = log_add_exp(log_esf[order], log_value + log_esf[order - 1]);
+        }
+    }
+
+    log_esf
 }
 
 #[cfg(feature = "alloc")]
-fn falling_factorial<T: RealField + Copy>(n: usize, order: usize) -> T {
-    (0..order).fold(T::one(), |value, offset| {
-        value * T::from_usize(n - offset).unwrap()
+fn log_upsilon<T: RealField + Float + Copy>(
+    cardinality: usize,
+    derivative_order: usize,
+    missed_probability: T,
+    log_esf: &[T],
+) -> T {
+    if cardinality < derivative_order {
+        return T::neg_infinity();
+    }
+
+    let max_detected = (cardinality - derivative_order).min(log_esf.len().saturating_sub(1));
+    (0..=max_detected).fold(T::neg_infinity(), |sum, detected| {
+        let missed_exponent = cardinality - detected - derivative_order;
+        let term = log_falling_factorial::<T>(cardinality, detected + derivative_order)
+            + log_integer_power(missed_probability, missed_exponent)
+            + log_esf[detected];
+        log_add_exp(sum, term)
     })
+}
+
+#[cfg(feature = "alloc")]
+fn log_integer_power<T: RealField + Float + Copy>(base: T, exponent: usize) -> T {
+    if exponent == 0 {
+        T::zero()
+    } else if base > T::zero() {
+        T::from_usize(exponent).unwrap() * Float::ln(base)
+    } else {
+        T::neg_infinity()
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn log_falling_factorial<T: RealField + Float + Copy>(n: usize, order: usize) -> T {
+    (0..order).fold(T::zero(), |value, offset| {
+        value + Float::ln(T::from_usize(n - offset).unwrap())
+    })
+}
+
+#[cfg(feature = "alloc")]
+fn log_add_exp<T: RealField + Float + Copy>(left: T, right: T) -> T {
+    if left == T::neg_infinity() {
+        return right;
+    }
+    if right == T::neg_infinity() {
+        return left;
+    }
+
+    let maximum = if left > right { left } else { right };
+    let minimum = if left > right { right } else { left };
+    maximum + Float::ln(T::one() + Float::exp(minimum - maximum))
 }
 
 // ============================================================================
@@ -952,6 +1032,77 @@ mod tests {
 
         // Stats should be populated
         assert_eq!(stats.singular_covariance_count, 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_multiple_out_of_support_measurements_remain_finite() {
+        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let observation = PositionSensor2D::new(1.0, 0.9);
+        let birth = FixedBirthModel::<f64, 4>::new();
+        let initial = CphdFilterState::from_mixture_and_cardinality(
+            GaussianMixture::from_components(vec![
+                GaussianState::new(
+                    1.0,
+                    StateVector::from_array([10.0, 10.0, 0.0, 0.0]),
+                    StateCovariance::identity(),
+                ),
+                GaussianState::new(
+                    1.0,
+                    StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                    StateCovariance::identity(),
+                ),
+            ]),
+            vec![0.05, 0.25, 0.70],
+        );
+        let predicted = initial.predict(&transition, &birth, 0.0);
+
+        // Both measurements are highly likely under the target model but lie
+        // outside clutter support. Their ratio product is around 1e598, which
+        // overflowed the former raw elementary-symmetric calculation.
+        let updated = predicted.update(
+            &[
+                Measurement::from_array([10.0, 10.0]),
+                Measurement::from_array([20.0, 20.0]),
+            ],
+            &observation,
+            &UniformClutter2D::new(1.0, (100.0, 200.0), (100.0, 200.0)),
+        );
+
+        let cardinality_sum: f64 = updated.cardinality.iter().sum();
+        assert!(
+            updated
+                .cardinality
+                .iter()
+                .all(|probability| probability.is_finite())
+        );
+        assert!((cardinality_sum - 1.0).abs() < 1e-12);
+        assert!(updated.expected_target_count().is_finite());
+        assert!(
+            updated
+                .mixture
+                .iter()
+                .all(|component| component.weight.is_finite())
+        );
+        assert!(updated.mixture.total_weight().is_finite());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_log_cardinality_update_handles_enormous_f32_ratios() {
+        let log_ratio = Float::ln(1e30_f32);
+        let (updated, (log_missed_factor, log_detection_factors)) =
+            update_cardinality(&[0.05_f32, 0.25, 0.70], 2.0, 0.1, &[log_ratio, log_ratio]);
+
+        let sum: f32 = updated.iter().sum();
+        assert!(updated.iter().all(|probability| probability.is_finite()));
+        assert!((sum - 1.0).abs() < 1e-5);
+        assert!(log_missed_factor.is_finite());
+        assert!(
+            log_detection_factors
+                .iter()
+                .all(|factor| factor.is_finite())
+        );
     }
 
     #[cfg(feature = "alloc")]

@@ -339,16 +339,11 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                         effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
 
                     let cost = if let Some((_, _, likelihood)) = posteriors[global_idx][j] {
-                        if likelihood > T::zero() {
-                            let ratio = p_d * likelihood * *existence_probability / kappa;
-                            if ratio > T::zero() {
-                                -ComplexField::ln(ratio).to_subset().unwrap_or(large_cost)
-                            } else {
-                                large_cost
-                            }
-                        } else {
-                            large_cost
-                        }
+                        negative_log_ratio_cost(
+                            &[p_d, likelihood, *existence_probability],
+                            kappa,
+                            large_cost,
+                        )
                     } else {
                         large_cost
                     };
@@ -361,9 +356,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                 cost_matrix.set(
                     row,
                     absent_col,
-                    -ComplexField::ln(absent_probability + T::from_f64(1e-300).unwrap())
-                        .to_subset()
-                        .unwrap_or(large_cost),
+                    negative_log_probability(absent_probability, large_cost),
                 );
 
                 let missed_probability = *existence_probability * (T::one() - p_d);
@@ -371,9 +364,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                 cost_matrix.set(
                     row,
                     missed_col,
-                    -ComplexField::ln(missed_probability + T::from_f64(1e-300).unwrap())
-                        .to_subset()
-                        .unwrap_or(large_cost),
+                    negative_log_probability(missed_probability, large_cost),
                 );
 
                 // Private columns can only be selected by their own row.
@@ -468,15 +459,38 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
     ///
     /// This method consumes the updated state and returns a predicted state.
     /// It applies the transition model to each track and updates survival
-    /// probabilities.
+    /// probabilities. Survival/death branching is limited using the default
+    /// hypothesis cap so prediction cannot materialize all `2^n` subsets.
     ///
     /// Note: Birth tracks are incorporated during the update step (joint
     /// prediction-update formulation).
     pub fn predict<Trans, Birth>(
+        self,
+        transition_model: &Trans,
+        birth_model: &Birth,
+        dt: T,
+    ) -> GlmbFilterState<T, N, Predicted>
+    where
+        Trans: TransitionModel<T, N>,
+        Birth: LabeledBirthModel<T, N>,
+    {
+        let max_hypotheses = GlmbTruncationConfig::<T>::default_config().max_hypotheses;
+        self.predict_with_max_hypotheses(transition_model, birth_model, dt, max_hypotheses)
+    }
+
+    /// Predicts with an explicit cap on survival/death hypotheses.
+    ///
+    /// After each track is branched, only the highest-weight partial
+    /// hypotheses are retained. Future survival/death factors are common to
+    /// every retained partial branch, so this produces the same top-k final
+    /// hypotheses as exhaustive generation followed by truncation, while using
+    /// `O(n * k)` hypothesis storage instead of `O(2^n)`.
+    pub fn predict_with_max_hypotheses<Trans, Birth>(
         mut self,
         transition_model: &Trans,
         _birth_model: &Birth, // Used in update, kept here for API consistency
         dt: T,
+        max_hypotheses: usize,
     ) -> GlmbFilterState<T, N, Predicted>
     where
         Trans: TransitionModel<T, N>,
@@ -484,11 +498,15 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
     {
         let transition_matrix = transition_model.transition_matrix(dt);
         let process_noise = transition_model.process_noise(dt);
+        // A GLMB density must retain a fallback hypothesis even if a caller
+        // supplies a zero cap.
+        let max_hypotheses = max_hypotheses.max(1);
 
         // Advance label generator to new time step
         self.label_gen.advance_time();
 
-        // Branch each labeled track into its survival and death alternatives.
+        // Branch each labeled track into survival and death alternatives. The
+        // partial top-k truncation bounds the temporary vector to at most 2k.
         let mut predicted_hypotheses = Vec::new();
         for hypothesis in &self.density.hypotheses {
             let mut branches = vec![GlmbHypothesis::empty(hypothesis.log_weight)];
@@ -511,7 +529,12 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                     ),
                 };
 
-                let mut next = Vec::with_capacity(branches.len() * 2);
+                let mut next = Vec::with_capacity(
+                    branches
+                        .len()
+                        .saturating_mul(2)
+                        .min(max_hypotheses.saturating_mul(2)),
+                );
                 for branch in branches {
                     let death_probability = T::one() - p_s;
                     if death_probability > T::zero() {
@@ -527,10 +550,12 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                         next.push(survival);
                     }
                 }
+                retain_best_hypotheses(&mut next, max_hypotheses);
                 branches = next;
             }
 
             predicted_hypotheses.extend(branches);
+            retain_best_hypotheses(&mut predicted_hypotheses, max_hypotheses);
         }
 
         let mut density = GlmbDensity {
@@ -544,6 +569,58 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             time_step: self.time_step + 1,
             _phase: PhantomData,
         }
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn negative_log_ratio_cost<T: RealField + Float + Copy>(
+    numerator_factors: &[T],
+    denominator: T,
+    fallback: f64,
+) -> f64 {
+    if denominator <= T::zero() || numerator_factors.iter().any(|&factor| factor <= T::zero()) {
+        return fallback;
+    }
+
+    let log_ratio = numerator_factors
+        .iter()
+        .fold(T::zero(), |sum, &factor| sum + Float::ln(factor))
+        - Float::ln(denominator);
+    let cost = -log_ratio;
+    if Float::is_finite(cost) {
+        cost.to_subset().unwrap_or(fallback)
+    } else {
+        fallback
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn negative_log_probability<T: RealField + Float + Copy>(probability: T, fallback: f64) -> f64 {
+    negative_log_ratio_cost(&[probability], T::one(), fallback)
+}
+
+#[cfg(feature = "alloc")]
+fn log_with_positive_floor<T: RealField + Float + Copy>(value: T) -> T {
+    Float::ln(if value > T::zero() {
+        value
+    } else {
+        <T as Float>::min_positive_value()
+    })
+}
+
+/// Retains the highest-weight hypotheses with stable ordering for equal weights.
+#[cfg(feature = "alloc")]
+fn retain_best_hypotheses<T: RealField + Copy, const N: usize>(
+    hypotheses: &mut Vec<GlmbHypothesis<T, N>>,
+    max_hypotheses: usize,
+) {
+    if hypotheses.len() > max_hypotheses {
+        hypotheses.sort_by(|a, b| {
+            b.log_weight
+                .partial_cmp(&a.log_weight)
+                .unwrap_or(core::cmp::Ordering::Equal)
+        });
+        hypotheses.truncate(max_hypotheses);
     }
 }
 
@@ -871,19 +948,10 @@ fn generate_hypotheses_from_assignment<
             let kappa = effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
 
             let cost = if let Some((_, _, likelihood)) = posteriors[i][j] {
-                if likelihood > T::zero() {
-                    let ratio = if *is_birth {
-                        p_d * likelihood * *r_birth / kappa
-                    } else {
-                        p_d * likelihood / kappa
-                    };
-                    if ratio > T::zero() {
-                        -ComplexField::ln(ratio).to_subset().unwrap_or(large_cost)
-                    } else {
-                        large_cost
-                    }
+                if *is_birth {
+                    negative_log_ratio_cost(&[p_d, likelihood, *r_birth], kappa, large_cost)
                 } else {
-                    large_cost
+                    negative_log_ratio_cost(&[p_d, likelihood], kappa, large_cost)
                 }
             } else {
                 large_cost
@@ -903,9 +971,7 @@ fn generate_hypotheses_from_assignment<
         cost_matrix.set(
             i,
             primary_col,
-            -ComplexField::ln(primary_probability + T::from_f64(1e-300).unwrap())
-                .to_subset()
-                .unwrap_or(large_cost),
+            negative_log_probability(primary_probability, large_cost),
         );
 
         let birth_missed_col = n_meas + n_total + i;
@@ -914,9 +980,7 @@ fn generate_hypotheses_from_assignment<
             cost_matrix.set(
                 i,
                 birth_missed_col,
-                -ComplexField::ln(birth_missed_probability + T::from_f64(1e-300).unwrap())
-                    .to_subset()
-                    .unwrap_or(large_cost),
+                negative_log_probability(birth_missed_probability, large_cost),
             );
         } else {
             cost_matrix.set(i, birth_missed_col, large_cost);
@@ -982,7 +1046,7 @@ fn generate_hypotheses_from_assignment<
         let mut log_weight_delta = T::zero();
 
         for p_d in detection_probs.iter().take(n_existing) {
-            log_weight_delta += ComplexField::ln(T::one() - *p_d + T::from_f64(1e-300).unwrap());
+            log_weight_delta += log_with_positive_floor(T::one() - *p_d);
         }
 
         result.push(GlmbHypothesis {
@@ -1118,19 +1182,10 @@ fn generate_hypotheses_ekf<
             let kappa = effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
 
             let cost = if let Some((_, _, likelihood)) = posteriors[i][j] {
-                if likelihood > T::zero() {
-                    let ratio = if *is_birth {
-                        p_d * likelihood * *r_birth / kappa
-                    } else {
-                        p_d * likelihood / kappa
-                    };
-                    if ratio > T::zero() {
-                        -ComplexField::ln(ratio).to_subset().unwrap_or(large_cost)
-                    } else {
-                        large_cost
-                    }
+                if *is_birth {
+                    negative_log_ratio_cost(&[p_d, likelihood, *r_birth], kappa, large_cost)
                 } else {
-                    large_cost
+                    negative_log_ratio_cost(&[p_d, likelihood], kappa, large_cost)
                 }
             } else {
                 large_cost
@@ -1150,9 +1205,7 @@ fn generate_hypotheses_ekf<
         cost_matrix.set(
             i,
             primary_col,
-            -ComplexField::ln(primary_probability + T::from_f64(1e-300).unwrap())
-                .to_subset()
-                .unwrap_or(large_cost),
+            negative_log_probability(primary_probability, large_cost),
         );
 
         let birth_missed_col = n_meas + n_total + i;
@@ -1161,9 +1214,7 @@ fn generate_hypotheses_ekf<
             cost_matrix.set(
                 i,
                 birth_missed_col,
-                -ComplexField::ln(birth_missed_probability + T::from_f64(1e-300).unwrap())
-                    .to_subset()
-                    .unwrap_or(large_cost),
+                negative_log_probability(birth_missed_probability, large_cost),
             );
         } else {
             cost_matrix.set(i, birth_missed_col, large_cost);
@@ -1226,7 +1277,7 @@ fn generate_hypotheses_ekf<
         let mut log_weight_delta = T::zero();
 
         for p_d in detection_probs.iter().take(n_existing) {
-            log_weight_delta += ComplexField::ln(T::one() - *p_d + T::from_f64(1e-300).unwrap());
+            log_weight_delta += log_with_positive_floor(T::one() - *p_d);
         }
 
         result.push(GlmbHypothesis {
@@ -1422,7 +1473,12 @@ where
         measurements: &[Measurement<T, M>],
         dt: T,
     ) -> (GlmbFilterState<T, N, Updated>, UpdateStats) {
-        let predicted = state.predict(&self.transition, &self.birth, dt);
+        let predicted = state.predict_with_max_hypotheses(
+            &self.transition,
+            &self.birth,
+            dt,
+            self.truncation.max_hypotheses,
+        );
         predicted.update(
             measurements,
             &self.observation,
@@ -1578,6 +1634,101 @@ mod tests {
             ),
         );
         assert!((joint.expected_target_count() - 0.25).abs() < 1e-12);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_prediction_is_bounded_for_many_tracks() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::ConstantVelocity2D;
+
+        let tracks = (0..48)
+            .map(|index| {
+                GlmbTrack::new(
+                    Label::new(0, index),
+                    GaussianState::new(
+                        1.0,
+                        StateVector::from_array([index as f64, 0.0, 0.0, 0.0]),
+                        StateCovariance::identity(),
+                    ),
+                )
+            })
+            .collect();
+        let predicted = GlmbFilterState::from_tracks(tracks).predict_with_max_hypotheses(
+            &ConstantVelocity2D::new(0.0_f64, 0.5),
+            &NoBirthModel,
+            1.0,
+            32,
+        );
+
+        // Exhaustive prediction would attempt 2^48 hypotheses. The result and
+        // every intermediate branching generation are capped at 32 and 64.
+        assert_eq!(predicted.density.num_hypotheses(), 32);
+        assert!(
+            predicted
+                .density
+                .hypotheses
+                .iter()
+                .all(|hypothesis| hypothesis.log_weight.is_finite())
+        );
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_prediction_does_not_preallocate_arbitrary_cap() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::ConstantVelocity2D;
+
+        let track = GlmbTrack::new(
+            Label::new(0, 0),
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([0.0_f64, 0.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let predicted = GlmbFilterState::from_tracks(vec![track]).predict_with_max_hypotheses(
+            &ConstantVelocity2D::new(0.0, 0.5),
+            &NoBirthModel,
+            1.0,
+            usize::MAX,
+        );
+
+        assert_eq!(predicted.density.num_hypotheses(), 2);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_normal_step_uses_configured_prediction_bound() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+
+        let tracks = (0..24)
+            .map(|index| {
+                GlmbTrack::new(
+                    Label::new(0, index),
+                    GaussianState::new(
+                        1.0,
+                        StateVector::from_array([index as f64, 0.0, 0.0, 0.0]),
+                        StateCovariance::identity(),
+                    ),
+                )
+            })
+            .collect();
+        let filter = GlmbFilter::with_truncation(
+            ConstantVelocity2D::new(0.0_f64, 0.5),
+            PositionSensor2D::new(1.0, 0.0),
+            UniformClutter2D::new(1.0, (-100.0, 100.0), (-100.0, 100.0)),
+            NoBirthModel,
+            GlmbTruncationConfig::new(-100.0, 12, None),
+            1,
+        );
+
+        // The legacy step path expanded 2^24 hypotheses before update could
+        // truncate them. Prediction now applies this filter's cap immediately.
+        let (updated, _) = filter.step(GlmbFilterState::from_tracks(tracks), &[], 1.0);
+        assert!(updated.num_hypotheses() <= 12);
+        assert!(!updated.density.is_empty());
     }
 
     #[cfg(feature = "alloc")]
@@ -1740,22 +1891,22 @@ mod tests {
 
     #[cfg(feature = "alloc")]
     #[test]
-    fn test_out_of_support_clutter_still_allows_target_association() {
+    fn test_out_of_support_clutter_still_allows_target_association_f32() {
         use crate::filters::lmb::NoBirthModel;
         use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
 
-        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let transition = ConstantVelocity2D::new(0.0_f32, 1.0);
         let track = GlmbTrack::new(
             Label::new(0, 0),
             GaussianState::new(
                 1.0,
                 StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
-                StateCovariance::identity(),
+                StateCovariance::identity().scale(1.0e-8),
             ),
         );
         let initial = GlmbFilterState::from_tracks(vec![track]);
-        let measurement = Measurement::from_array([20.0, 20.0]);
-        let observation = PositionSensor2D::new(1.0, 0.9);
+        let measurement = Measurement::from_array([20.0_f32, 20.0]);
+        let observation = PositionSensor2D::new(1.0e-8, 0.9);
         let clutter = UniformClutter2D::new(1.0, (0.0, 10.0), (0.0, 10.0));
         let truncation = GlmbTruncationConfig::new(-100.0, 10, None);
 

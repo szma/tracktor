@@ -11,12 +11,12 @@ use crate::types::spaces::Measurement;
 /// Returns a safe denominator for target-to-clutter likelihood ratios.
 ///
 /// Finite-support clutter has exactly zero intensity outside its region, but a
-/// target may still generate such a measurement. Using one shared positive
-/// floor preserves that target-originated hypothesis while avoiding division
-/// by zero in ratio-based association algorithms.
+/// target may still generate such a measurement. Using the smallest positive
+/// normal value of the scalar type preserves that target-originated hypothesis
+/// while avoiding division by zero in ratio-based association algorithms.
 #[cfg(feature = "alloc")]
 pub(crate) fn effective_clutter_intensity<T: RealField + Float>(intensity: T) -> T {
-    let floor = T::from_f64(1e-300).unwrap();
+    let floor = <T as Float>::min_positive_value();
     if intensity > floor { intensity } else { floor }
 }
 
@@ -586,5 +586,26 @@ mod tests {
         // Should contain any point within range
         let inside = Measurement::from_array([100.0, 3.0]); // ~172°
         assert!(clutter.contains(&inside));
+    }
+
+    #[test]
+    fn test_effective_clutter_intensity_f32_is_positive_outside_support() {
+        let clutter = UniformClutter2D::new(1.0_f32, (0.0, 1.0), (0.0, 1.0));
+        let outside = Measurement::from_array([2.0, 0.5]);
+
+        let intensity = clutter.clutter_intensity(&outside);
+        assert_eq!(intensity, 0.0);
+
+        let effective = effective_clutter_intensity(intensity);
+        assert_eq!(effective, f32::MIN_POSITIVE);
+        assert!(effective.is_finite());
+        assert!(effective > 0.0);
+    }
+
+    #[test]
+    fn test_effective_clutter_intensity_preserves_representable_f32_intensity() {
+        let intensity = 1.0e-20_f32;
+
+        assert_eq!(effective_clutter_intensity(intensity), intensity);
     }
 }
