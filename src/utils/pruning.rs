@@ -9,9 +9,9 @@ use num_traits::Float;
 use alloc::vec::Vec;
 
 #[cfg(feature = "alloc")]
-use crate::types::gaussian::GaussianState;
-#[cfg(feature = "alloc")]
 use crate::types::gaussian::GaussianMixture;
+#[cfg(feature = "alloc")]
+use crate::types::gaussian::GaussianState;
 #[cfg(feature = "alloc")]
 use crate::types::spaces::{StateCovariance, StateVector};
 
@@ -48,33 +48,27 @@ impl<T: RealField + Float> PruningConfig<T> {
 
 /// Prunes components with weight below a threshold.
 ///
-/// The weights of pruned components are
-/// redistributed equally among the remaining components to preserve the
-/// total weight (expected target count in PHD filters).
+/// Retained weights are scaled proportionally to preserve the total weight
+/// (expected target count in PHD filters) without changing their ratios.
 #[cfg(feature = "alloc")]
 pub fn prune_by_weight<T: RealField + Float + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
     threshold: T,
 ) -> GaussianMixture<T, N> {
-    // Calculate the total weight of pruned components
-    let pruned_weight_sum: T = mixture
-        .iter()
-        .filter(|c| c.weight < threshold)
-        .fold(T::zero(), |acc, c| acc + c.weight);
-
-    // Collect remaining components
+    let original_total = mixture.total_weight();
     let mut remaining: Vec<_> = mixture
         .iter()
         .filter(|c| c.weight >= threshold)
         .cloned()
         .collect();
 
-    // Redistribute pruned weights across remaining components
-    if !remaining.is_empty() && pruned_weight_sum > T::zero() {
-        let n_remaining = T::from(remaining.len()).unwrap();
-        let weight_per_component = pruned_weight_sum / n_remaining;
+    let retained_total = remaining
+        .iter()
+        .fold(T::zero(), |sum, component| sum + component.weight);
+    if retained_total > T::zero() && original_total > T::zero() {
+        let scale = original_total / retained_total;
         for component in &mut remaining {
-            component.weight += weight_per_component;
+            component.weight *= scale;
         }
     }
 
@@ -83,9 +77,8 @@ pub fn prune_by_weight<T: RealField + Float + Copy, const N: usize>(
 
 /// Truncates the mixture to keep only the top N components by weight.
 ///
-/// The weights of truncated components are
-/// redistributed equally among the remaining components to preserve the
-/// total weight (expected target count in PHD filters).
+/// Retained weights are scaled proportionally to preserve the total weight
+/// (expected target count in PHD filters) without changing their ratios.
 #[cfg(feature = "alloc")]
 pub fn truncate<T: RealField + Float + Copy, const N: usize>(
     mixture: &GaussianMixture<T, N>,
@@ -103,25 +96,20 @@ pub fn truncate<T: RealField + Float + Copy, const N: usize>(
             .unwrap_or(core::cmp::Ordering::Equal)
     });
 
-    // Calculate the total weight of truncated components
-    let truncated_weight_sum: T = indexed
-        .iter()
-        .skip(max_components)
-        .fold(T::zero(), |acc, (_, c)| acc + c.weight);
-
-    // Collect the top components
+    let original_total = mixture.total_weight();
     let mut remaining: Vec<_> = indexed
         .into_iter()
         .take(max_components)
         .map(|(_, c)| c.clone())
         .collect();
 
-    // Redistribute truncated weights across remaining components
-    if !remaining.is_empty() && truncated_weight_sum > T::zero() {
-        let n_remaining = T::from(remaining.len()).unwrap();
-        let weight_per_component = truncated_weight_sum / n_remaining;
+    let retained_total = remaining
+        .iter()
+        .fold(T::zero(), |sum, component| sum + component.weight);
+    if retained_total > T::zero() && original_total > T::zero() {
+        let scale = original_total / retained_total;
         for component in &mut remaining {
-            component.weight += weight_per_component;
+            component.weight *= scale;
         }
     }
 
@@ -312,8 +300,11 @@ mod tests {
         let pruned = prune_by_weight(&mixture, 0.01);
 
         assert_eq!(pruned.len(), 2);
-        // Weight should be preserved
+        // Total mass and the ratio between retained modes are preserved.
         assert!((pruned.total_weight() - original_total).abs() < 1e-10);
+        assert!(
+            (pruned.components[0].weight / pruned.components[1].weight - 5.0 / 3.0).abs() < 1e-10
+        );
     }
 
     #[cfg(feature = "alloc")]
@@ -329,8 +320,12 @@ mod tests {
 
         assert_eq!(truncated.len(), 3);
 
-        // Weight should be preserved
+        // Total mass and the ratio between retained modes are preserved.
         assert!((truncated.total_weight() - original_total).abs() < 1e-10);
+        assert!(
+            (truncated.components[0].weight / truncated.components[1].weight - 9.0 / 8.0).abs()
+                < 1e-10
+        );
     }
 
     #[cfg(feature = "alloc")]

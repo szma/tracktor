@@ -300,6 +300,55 @@ impl<T: RealField + Float + Copy, const N: usize> SigmaPoints<T, N> {
     }
 }
 
+/// Recovers observation statistics while respecting the observation space's
+/// topology (for example, circular bearings).
+#[cfg(feature = "alloc")]
+fn recover_observation_statistics<
+    T: RealField + Float + Copy,
+    Obs: NonlinearObservationModel<T, N, M>,
+    const N: usize,
+    const M: usize,
+>(
+    sigma_points: &SigmaPoints<T, N>,
+    observation: &Obs,
+    state_mean: &SVector<T, N>,
+    noise: &SMatrix<T, M, M>,
+) -> (SVector<T, M>, SMatrix<T, M, M>, SMatrix<T, N, M>) {
+    let transformed: Vec<Measurement<T, M>> = sigma_points
+        .points
+        .iter()
+        .map(|point| observation.observe(point))
+        .collect();
+    let mut weights = Vec::with_capacity(transformed.len());
+    weights.push(sigma_points.weight_mean_0);
+    weights.extend(core::iter::repeat_n(
+        sigma_points.weight_i,
+        transformed.len().saturating_sub(1),
+    ));
+
+    let mean = observation.measurement_mean(&transformed, &weights);
+    let mean_vector = *mean.as_svector();
+
+    let diff0 = observation.innovation(&transformed[0], &mean);
+    let mut covariance =
+        (diff0.as_svector() * diff0.as_svector().transpose()).scale(sigma_points.weight_cov_0);
+    let state_diff0 = sigma_points.points[0].as_svector() - state_mean;
+    let mut cross_covariance =
+        (state_diff0 * diff0.as_svector().transpose()).scale(sigma_points.weight_cov_0);
+
+    for (point, transformed_point) in sigma_points.points.iter().zip(&transformed).skip(1) {
+        let difference = observation.innovation(transformed_point, &mean);
+        covariance += (difference.as_svector() * difference.as_svector().transpose())
+            .scale(sigma_points.weight_i);
+        let state_difference = point.as_svector() - state_mean;
+        cross_covariance +=
+            (state_difference * difference.as_svector().transpose()).scale(sigma_points.weight_i);
+    }
+    covariance += noise;
+
+    (mean_vector, covariance, cross_covariance)
+}
+
 // ============================================================================
 // Unscented Kalman Filter
 // ============================================================================
@@ -414,17 +463,13 @@ where
         // Measurement noise
         let r = self.observation.measurement_noise();
 
-        // Transform sigma points through observation and recover statistics
-        let (z_mean, z_cov) = sigma_points.recover_mean_cov(
-            |x| self.observation.observe(x).into_svector(),
-            Some(r.as_matrix()),
-        );
-
-        // Cross-covariance between state and measurement
-        let cross_cov = sigma_points.cross_covariance(
+        // Transform sigma points through the observation model, respecting
+        // periodic measurement coordinates.
+        let (z_mean, z_cov, cross_cov) = recover_observation_statistics(
+            &sigma_points,
+            &self.observation,
             state.mean.as_svector(),
-            |x| self.observation.observe(x).into_svector(),
-            &z_mean,
+            r.as_matrix(),
         );
 
         // Kalman gain: K = P_xz * P_zz^{-1}
@@ -432,10 +477,13 @@ where
         let kalman_gain = cross_cov * z_cov_inv;
 
         // Innovation
-        let innovation = measurement.as_svector() - z_mean;
+        let predicted_measurement = Measurement::from_svector(z_mean);
+        let innovation = self
+            .observation
+            .innovation(measurement, &predicted_measurement);
 
         // Update mean
-        let updated_mean = state.mean.as_svector() + kalman_gain * innovation;
+        let updated_mean = state.mean.as_svector() + kalman_gain * innovation.as_svector();
 
         // Update covariance: P = P - K * P_zz * K^T
         let updated_cov =
@@ -467,17 +515,20 @@ where
         let sigma_points = SigmaPoints::generate(state, &self.params)?;
         let r = self.observation.measurement_noise();
 
-        let (z_mean, z_cov) = sigma_points.recover_mean_cov(
-            |x| self.observation.observe(x).into_svector(),
-            Some(r.as_matrix()),
+        let (z_mean, z_cov, _) = recover_observation_statistics(
+            &sigma_points,
+            &self.observation,
+            state.mean.as_svector(),
+            r.as_matrix(),
         );
 
-        let innovation = measurement.as_svector() - z_mean;
-        let innovation_typed =
-            crate::types::spaces::Innovation::from_svector(innovation.clone_owned());
+        let predicted_measurement = Measurement::from_svector(z_mean);
+        let innovation = self
+            .observation
+            .innovation(measurement, &predicted_measurement);
         let cov_typed = crate::types::spaces::Covariance::from_matrix(z_cov);
 
-        crate::types::gaussian::gaussian_likelihood(&innovation_typed, &cov_typed)
+        crate::types::gaussian::gaussian_likelihood(&innovation, &cov_typed)
     }
 
     /// Computes the Mahalanobis distance between a measurement and the predicted measurement.
@@ -489,15 +540,21 @@ where
         let sigma_points = SigmaPoints::generate(state, &self.params)?;
         let r = self.observation.measurement_noise();
 
-        let (z_mean, z_cov) = sigma_points.recover_mean_cov(
-            |x| self.observation.observe(x).into_svector(),
-            Some(r.as_matrix()),
+        let (z_mean, z_cov, _) = recover_observation_statistics(
+            &sigma_points,
+            &self.observation,
+            state.mean.as_svector(),
+            r.as_matrix(),
         );
 
         let z_cov_inv = z_cov.try_inverse()?;
-        let innovation = measurement.as_svector() - z_mean;
+        let predicted_measurement = Measurement::from_svector(z_mean);
+        let innovation = self
+            .observation
+            .innovation(measurement, &predicted_measurement);
+        let innovation_vector = innovation.as_svector();
 
-        let d_sq = (innovation.transpose() * z_cov_inv * innovation)[(0, 0)];
+        let d_sq = (innovation_vector.transpose() * z_cov_inv * innovation_vector)[(0, 0)];
         Some(d_sq)
     }
 }
@@ -566,22 +623,21 @@ where
         let sigma_points = SigmaPoints::generate(state, &self.params)?;
         let r = self.observation.measurement_noise();
 
-        let (z_mean, z_cov) = sigma_points.recover_mean_cov(
-            |x| self.observation.observe(x).into_svector(),
-            Some(r.as_matrix()),
-        );
-
-        let cross_cov = sigma_points.cross_covariance(
+        let (z_mean, z_cov, cross_cov) = recover_observation_statistics(
+            &sigma_points,
+            &self.observation,
             state.mean.as_svector(),
-            |x| self.observation.observe(x).into_svector(),
-            &z_mean,
+            r.as_matrix(),
         );
 
         let z_cov_inv = z_cov.try_inverse()?;
         let kalman_gain = cross_cov * z_cov_inv;
 
-        let innovation = measurement.as_svector() - z_mean;
-        let updated_mean = state.mean.as_svector() + kalman_gain * innovation;
+        let predicted_measurement = Measurement::from_svector(z_mean);
+        let innovation = self
+            .observation
+            .innovation(measurement, &predicted_measurement);
+        let updated_mean = state.mean.as_svector() + kalman_gain * innovation.as_svector();
         let updated_cov =
             state.covariance.as_matrix() - kalman_gain * z_cov * kalman_gain.transpose();
 
@@ -785,6 +841,21 @@ mod tests {
         let measurement = Measurement::from_array([110.0, 0.0]);
         let updated = filter.update(&predicted, &measurement).unwrap();
         assert!((updated.mean.index(0) - 110.0).abs() < 5.0);
+    }
+
+    #[test]
+    fn test_ukf_wraps_bearing_across_branch_cut() {
+        let transition = ConstantVelocity2D::new(0.1_f64, 0.99);
+        let sensor = RangeBearingSensor::new(1.0, 0.1, 0.95);
+        let filter = UkfLinearTransition::new(transition, sensor, UkfParams::new(0.1, 2.0, 0.0));
+        let state = UkfState::new(
+            StateVector::from_array([-100.0, 0.1, 0.0, 0.0]),
+            StateCovariance::identity(),
+        );
+        let measurement = Measurement::from_array([100.0, -core::f64::consts::PI + 0.001]);
+
+        let updated = filter.update(&state, &measurement).unwrap();
+        assert!(updated.mean.index(1).abs() < 1.0);
     }
 
     #[test]

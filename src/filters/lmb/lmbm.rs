@@ -22,7 +22,7 @@ use alloc::vec::Vec;
 
 use super::filter::LabeledBirthModel;
 use super::types::{LmbmHypothesis, LmbmState, PosteriorGrid};
-use crate::models::{ClutterModel, ObservationModel, TransitionModel};
+use crate::models::{ClutterModel, ObservationModel, TransitionModel, effective_clutter_intensity};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
 use crate::types::phase::{Predicted, UpdateStats, Updated};
@@ -219,8 +219,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
                     );
 
                     // Cost = -log(likelihood * p_d / kappa)
-                    let kappa = clutter_model.clutter_intensity(measurement);
-                    let cost = if likelihood > T::zero() && kappa > T::zero() {
+                    let kappa =
+                        effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
+                    let cost = if likelihood > T::zero() {
                         let ratio = likelihood * p_d / kappa;
                         if ratio > T::zero() {
                             -ComplexField::ln(ratio).to_subset().unwrap_or(0.0)
@@ -540,6 +541,42 @@ mod tests {
     fn test_lmbm_filter_state_creation() {
         let state: LmbmFilterState<f64, 4, Updated> = LmbmFilterState::new();
         assert_eq!(state.num_hypotheses(), 1);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_out_of_support_clutter_still_allows_lmbm_target_association() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+        use crate::types::spaces::StateCovariance;
+
+        let track = BernoulliTrack::new(
+            Label::new(0, 0),
+            0.9,
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let predicted = LmbmFilterState::from_hypotheses(vec![LmbmHypothesis::new(
+            0.0,
+            vec![track],
+        )])
+        .predict(&ConstantVelocity2D::new(0.0, 1.0), &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update(
+            &[
+                Measurement::from_array([20.0, 20.0]),
+                Measurement::from_array([5.0, 5.0]),
+            ],
+            &PositionSensor2D::new(1.0, 0.9),
+            &UniformClutter2D::new(1.0, (0.0, 10.0), (0.0, 10.0)),
+            2,
+            2,
+        );
+
+        let best = extract_best_hypothesis(&updated).unwrap();
+        assert!(*best.tracks[0].state.mean.index(0) > 18.0);
     }
 
     #[cfg(feature = "alloc")]

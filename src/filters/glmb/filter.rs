@@ -31,6 +31,7 @@ use alloc::vec::Vec;
 
 use super::types::{GlmbDensity, GlmbHypothesis, GlmbTrack, GlmbTruncationConfig};
 use crate::filters::lmb::LabeledBirthModel;
+use crate::models::effective_clutter_intensity;
 use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{Label, LabelGenerator};
@@ -93,7 +94,6 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         let hypothesis = GlmbHypothesis::new(T::zero(), tracks, associations);
         Self::from_hypotheses(vec![hypothesis])
     }
-
 
     /// Returns the number of hypotheses.
     #[inline]
@@ -175,11 +175,6 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         for (label, track) in unique_tracks {
             let p_s = transition_model.survival_probability(&track.state.mean);
 
-            if p_s < T::from_f64(1e-10).unwrap() {
-                // Track dies with high probability - skip
-                continue;
-            }
-
             let predicted_mean = transition_matrix.apply_state(&track.state.mean);
             let predicted_cov = transition_matrix
                 .propagate_covariance(&track.state.covariance)
@@ -187,7 +182,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
 
             let predicted_track = GlmbTrack {
                 label,
-                state: GaussianState::new(track.state.weight * p_s, predicted_mean, predicted_cov),
+                state: GaussianState::new(track.state.weight, predicted_mean, predicted_cov),
             };
 
             predicted_tracks.insert(label, (predicted_track, p_s));
@@ -276,37 +271,14 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         let mut hypothesis_groups: BTreeMap<Vec<Label>, Vec<(usize, T)>> = BTreeMap::new();
 
         for (hyp_idx, hypothesis) in self.density.hypotheses.iter().enumerate() {
-            // Get the labels of tracks that survived prediction
-            let mut track_labels: Vec<Label> = hypothesis
-                .tracks
-                .iter()
-                .filter_map(|t| {
-                    if predicted_tracks.contains_key(&t.label) {
-                        Some(t.label)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+            let mut track_labels: Vec<Label> =
+                hypothesis.tracks.iter().map(|track| track.label).collect();
             track_labels.sort();
-
-            // Compute log weight adjustment for dead tracks
-            let mut death_log_weight = T::zero();
-            for track in &hypothesis.tracks {
-                if !predicted_tracks.contains_key(&track.label) {
-                    // Track died
-                    let p_s = T::from_f64(1e-10).unwrap();
-                    death_log_weight +=
-                        ComplexField::ln(T::one() - p_s + T::from_f64(1e-300).unwrap());
-                }
-            }
-
-            let adjusted_log_weight = hypothesis.log_weight + death_log_weight;
 
             hypothesis_groups
                 .entry(track_labels)
                 .or_default()
-                .push((hyp_idx, adjusted_log_weight));
+                .push((hyp_idx, hypothesis.log_weight));
         }
 
         // Step 7: Process each hypothesis group
@@ -315,7 +287,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         for (track_labels, group) in hypothesis_groups {
             // Build cost matrix for this track set + birth tracks
             // Rows: existing tracks from this group + all birth tracks
-            // Columns: measurements + miss columns
+            // Columns: measurements + private absent and missed columns
 
             let n_existing = track_labels.len();
             let n_birth = birth_tracks.len();
@@ -330,18 +302,10 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             }
 
             if n_group_tracks == 0 {
-                // No tracks, only clutter
-                let clutter_log_weight: T = measurements
-                    .iter()
-                    .map(|z| ComplexField::ln(clutter_model.clutter_intensity(z)))
-                    .fold(T::zero(), |acc, x| acc + x);
-
+                // The common clutter set likelihood is factored out of every
+                // hypothesis; association costs below use target/kappa ratios.
                 for (_, log_weight) in &group {
-                    new_hypotheses.push(GlmbHypothesis {
-                        log_weight: *log_weight + clutter_log_weight,
-                        tracks: Vec::new(),
-                        current_association: Vec::new(),
-                    });
+                    new_hypotheses.push(GlmbHypothesis::empty(*log_weight));
                 }
                 continue;
             }
@@ -359,25 +323,24 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             }
 
             // Build cost matrix
-            let n_cols = n_meas + n_group_tracks;
+            // Each row has a private absent/death column and a private
+            // present-but-missed column in addition to shared measurements.
+            let n_cols = n_meas + 2 * n_group_tracks;
             let mut cost_matrix = crate::assignment::CostMatrix::zeros(n_group_tracks, n_cols);
             let large_cost = 1e10_f64;
 
             for (row, &global_idx) in group_track_indices.iter().enumerate() {
-                let (_, is_birth, r_birth) = &all_tracks[global_idx];
+                let (_, _, existence_probability) = &all_tracks[global_idx];
                 let p_d = detection_probs[global_idx];
 
                 // Detection columns
                 for (j, measurement) in measurements.iter().enumerate() {
-                    let kappa = clutter_model.clutter_intensity(measurement);
+                    let kappa =
+                        effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
 
                     let cost = if let Some((_, _, likelihood)) = posteriors[global_idx][j] {
-                        if likelihood > T::zero() && kappa > T::zero() {
-                            let ratio = if *is_birth {
-                                p_d * likelihood * *r_birth / kappa
-                            } else {
-                                p_d * likelihood / kappa
-                            };
+                        if likelihood > T::zero() {
+                            let ratio = p_d * likelihood * *existence_probability / kappa;
                             if ratio > T::zero() {
                                 -ComplexField::ln(ratio).to_subset().unwrap_or(large_cost)
                             } else {
@@ -393,64 +356,57 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                     cost_matrix.set(row, j, cost);
                 }
 
-                // Miss column
-                let miss_col = n_meas + row;
-                let miss_cost = if *is_birth {
-                    // Birth track not born - cost of not detecting birth
-                    -ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap())
+                let absent_probability = T::one() - *existence_probability;
+                let absent_col = n_meas + row;
+                cost_matrix.set(
+                    row,
+                    absent_col,
+                    -ComplexField::ln(absent_probability + T::from_f64(1e-300).unwrap())
                         .to_subset()
-                        .unwrap_or(large_cost)
-                } else {
-                    // Existing track missed detection
-                    -ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap())
-                        .to_subset()
-                        .unwrap_or(large_cost)
-                };
-                cost_matrix.set(row, miss_col, miss_cost);
+                        .unwrap_or(large_cost),
+                );
 
-                // Set other miss columns to infinity (each track has its own miss column)
+                let missed_probability = *existence_probability * (T::one() - p_d);
+                let missed_col = n_meas + n_group_tracks + row;
+                cost_matrix.set(
+                    row,
+                    missed_col,
+                    -ComplexField::ln(missed_probability + T::from_f64(1e-300).unwrap())
+                        .to_subset()
+                        .unwrap_or(large_cost),
+                );
+
+                // Private columns can only be selected by their own row.
                 for other_row in 0..n_group_tracks {
                     if other_row != row {
                         cost_matrix.set(row, n_meas + other_row, large_cost);
+                        cost_matrix.set(row, n_meas + n_group_tracks + other_row, large_cost);
                     }
                 }
             }
 
             // Run Murty's k-best
-            let assignments = crate::assignment::hungarian::murty_k_best(&cost_matrix, config.k_best);
+            let assignments =
+                crate::assignment::hungarian::murty_k_best(&cost_matrix, config.k_best);
 
             // Generate hypotheses from assignments for each input hypothesis in this group
             for (_hyp_idx, base_log_weight) in &group {
                 for assignment in &assignments {
                     let mut output_tracks: Vec<GlmbTrack<T, N>> = Vec::new();
                     let mut associations: Vec<Option<usize>> = Vec::new();
-                    let mut log_weight_delta = T::zero();
 
                     for (row, col_opt) in assignment.mapping.iter().enumerate() {
                         let col = match col_opt {
                             Some(c) => *c,
-                            None => continue, // Unassigned row, skip
+                            None => continue,
                         };
                         let global_idx = group_track_indices[row];
-                        let (track, is_birth, r_birth) = &all_tracks[global_idx];
-                        let p_d = detection_probs[global_idx];
+                        let (track, _, _) = &all_tracks[global_idx];
 
                         if col < n_meas {
-                            // Detection
-                            if let Some((updated_mean, updated_cov, likelihood)) =
+                            if let Some((updated_mean, updated_cov, _)) =
                                 &posteriors[global_idx][col]
                             {
-                                let kappa = clutter_model.clutter_intensity(&measurements[col]);
-
-                                let weight_contrib = if *is_birth {
-                                    p_d * *likelihood * *r_birth / kappa
-                                } else {
-                                    p_d * *likelihood / kappa
-                                };
-
-                                log_weight_delta +=
-                                    ComplexField::ln(weight_contrib + T::from_f64(1e-300).unwrap());
-
                                 output_tracks.push(GlmbTrack {
                                     label: track.label,
                                     state: GaussianState::new(
@@ -461,29 +417,17 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                                 });
                                 associations.push(Some(col));
                             }
-                        } else {
-                            // Miss detection
-                            if *is_birth {
-                                // Birth track not instantiated - skip
-                                log_weight_delta += ComplexField::ln(
-                                    T::one() - *r_birth + T::from_f64(1e-300).unwrap(),
-                                );
-                            } else {
-                                // Existing track missed
-                                log_weight_delta +=
-                                    ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
-
-                                output_tracks.push(track.clone());
-                                associations.push(None);
-                            }
+                        } else if col >= n_meas + n_group_tracks {
+                            // The track exists/survives but was not detected.
+                            output_tracks.push(track.clone());
+                            associations.push(None);
                         }
+                        // The first private block denotes non-birth/death and
+                        // therefore contributes no output track.
                     }
 
-                    let new_log_weight =
-                        *base_log_weight + log_weight_delta - T::from(assignment.cost).unwrap();
-
                     new_hypotheses.push(GlmbHypothesis {
-                        log_weight: new_log_weight,
+                        log_weight: *base_log_weight - T::from(assignment.cost).unwrap(),
                         tracks: output_tracks,
                         current_association: associations,
                     });
@@ -544,51 +488,58 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         // Advance label generator to new time step
         self.label_gen.advance_time();
 
-        // Predict each hypothesis
-        for hypothesis in &mut self.density.hypotheses {
-            // Predict existing tracks with survival
-            let mut tracks_to_remove: Vec<usize> = Vec::new();
+        // Branch each labeled track into its survival and death alternatives.
+        let mut predicted_hypotheses = Vec::new();
+        for hypothesis in &self.density.hypotheses {
+            let mut branches = vec![GlmbHypothesis::empty(hypothesis.log_weight)];
 
-            for (idx, track) in hypothesis.tracks.iter_mut().enumerate() {
+            for track in &hypothesis.tracks {
                 let p_s = transition_model.survival_probability(&track.state.mean);
+                assert!(
+                    p_s >= T::zero() && p_s <= T::one(),
+                    "Survival probability must be in [0, 1]"
+                );
 
-                // Check if track should be removed due to very low survival
-                if p_s < T::from_f64(1e-10).unwrap() {
-                    tracks_to_remove.push(idx);
-                    continue;
+                let predicted_track = GlmbTrack {
+                    label: track.label,
+                    state: GaussianState::new(
+                        track.state.weight,
+                        transition_matrix.apply_state(&track.state.mean),
+                        transition_matrix
+                            .propagate_covariance(&track.state.covariance)
+                            .add(&process_noise),
+                    ),
+                };
+
+                let mut next = Vec::with_capacity(branches.len() * 2);
+                for branch in branches {
+                    let death_probability = T::one() - p_s;
+                    if death_probability > T::zero() {
+                        let mut death = branch.clone();
+                        death.log_weight += ComplexField::ln(death_probability);
+                        next.push(death);
+                    }
+                    if p_s > T::zero() {
+                        let mut survival = branch;
+                        survival.log_weight += ComplexField::ln(p_s);
+                        survival.tracks.push(predicted_track.clone());
+                        survival.current_association.push(None);
+                        next.push(survival);
+                    }
                 }
-
-                // Predict state
-                track.state.mean = transition_matrix.apply_state(&track.state.mean);
-                track.state.covariance = transition_matrix
-                    .propagate_covariance(&track.state.covariance)
-                    .add(&process_noise);
-
-                // Weight contribution from survival
-                track.state.weight *= p_s;
+                branches = next;
             }
 
-            // Remove dead tracks (iterate in reverse to preserve indices)
-            for &idx in tracks_to_remove.iter().rev() {
-                hypothesis.tracks.remove(idx);
-                hypothesis.current_association.remove(idx);
-            }
-
-            // Update log weight for track deaths
-            for _ in &tracks_to_remove {
-                let p_s = T::from_f64(1e-10).unwrap(); // Survival prob was below this
-                hypothesis.log_weight +=
-                    ComplexField::ln(T::one() - p_s + T::from_f64(1e-300).unwrap());
-            }
-
-            // Clear old associations (they belong to previous timestep)
-            for assoc in &mut hypothesis.current_association {
-                *assoc = None;
-            }
+            predicted_hypotheses.extend(branches);
         }
 
+        let mut density = GlmbDensity {
+            hypotheses: predicted_hypotheses,
+        };
+        density.normalize_log_weights();
+
         GlmbFilterState {
-            density: self.density,
+            density,
             label_gen: self.label_gen,
             time_step: self.time_step + 1,
             _phase: PhantomData,
@@ -609,7 +560,6 @@ impl<T: RealField + Float + Copy, const N: usize> Default for GlmbFilterState<T,
 
 #[cfg(feature = "alloc")]
 impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Predicted> {
-
     /// Returns the expected number of targets (before update).
     pub fn expected_target_count(&self) -> T {
         self.density
@@ -854,17 +804,9 @@ fn generate_hypotheses_from_assignment<
     }
 
     if n_total == 0 {
-        // No tracks but have measurements - they're all clutter
-        let clutter_log_weight: T = measurements
-            .iter()
-            .map(|z| ComplexField::ln(clutter_model.clutter_intensity(z)))
-            .fold(T::zero(), |acc, x| acc + x);
-
-        return vec![GlmbHypothesis {
-            log_weight: hypothesis.log_weight + clutter_log_weight,
-            tracks: Vec::new(),
-            current_association: Vec::new(),
-        }];
+        // The common clutter set likelihood is factored out of every
+        // hypothesis; association costs below use target/kappa ratios.
+        return vec![GlmbHypothesis::empty(hypothesis.log_weight)];
     }
 
     // Precompute posteriors and likelihoods
@@ -916,8 +858,8 @@ fn generate_hypotheses_from_assignment<
 
     // Build cost matrix
     // Rows: tracks (existing + birth)
-    // Columns: measurements + miss columns (one per track)
-    let n_cols = n_meas + n_total;
+    // Columns: measurements + private absence/miss alternatives.
+    let n_cols = n_meas + 2 * n_total;
     let mut cost_matrix = crate::assignment::CostMatrix::zeros(n_total, n_cols);
     let large_cost = 1e10_f64;
 
@@ -926,10 +868,10 @@ fn generate_hypotheses_from_assignment<
 
         // Detection columns
         for (j, measurement) in measurements.iter().enumerate() {
-            let kappa = clutter_model.clutter_intensity(measurement);
+            let kappa = effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
 
             let cost = if let Some((_, _, likelihood)) = posteriors[i][j] {
-                if likelihood > T::zero() && kappa > T::zero() {
+                if likelihood > T::zero() {
                     let ratio = if *is_birth {
                         p_d * likelihood * *r_birth / kappa
                     } else {
@@ -950,33 +892,41 @@ fn generate_hypotheses_from_assignment<
             cost_matrix.set(i, j, cost);
         }
 
-        // Miss column for this track
-        let miss_col = n_meas + i;
-        let miss_cost = if *is_birth {
-            // Birth track not born
-            let one_minus_r = T::one() - *r_birth;
-            if one_minus_r > T::from_f64(1e-300).unwrap() {
-                -ComplexField::ln(one_minus_r).to_subset().unwrap_or(0.0)
-            } else {
-                large_cost // r_birth ≈ 1 means must be born
-            }
+        // The first private column is absence for a birth and a miss for an
+        // existing track. A birth also needs a distinct born-but-missed option.
+        let primary_col = n_meas + i;
+        let primary_probability = if *is_birth {
+            T::one() - *r_birth
         } else {
-            // Existing track missed detection
-            let one_minus_pd = T::one() - p_d;
-            if one_minus_pd > T::from_f64(1e-300).unwrap() {
-                -ComplexField::ln(one_minus_pd)
-                    .to_subset()
-                    .unwrap_or(large_cost)
-            } else {
-                large_cost // p_d ≈ 1 means must be detected
-            }
+            T::one() - p_d
         };
-        cost_matrix.set(i, miss_col, miss_cost);
+        cost_matrix.set(
+            i,
+            primary_col,
+            -ComplexField::ln(primary_probability + T::from_f64(1e-300).unwrap())
+                .to_subset()
+                .unwrap_or(large_cost),
+        );
 
-        // Set infinite cost for other miss columns
-        for k in 0..n_total {
-            if k != i {
-                cost_matrix.set(i, n_meas + k, 1e20);
+        let birth_missed_col = n_meas + n_total + i;
+        if *is_birth {
+            let birth_missed_probability = *r_birth * (T::one() - p_d);
+            cost_matrix.set(
+                i,
+                birth_missed_col,
+                -ComplexField::ln(birth_missed_probability + T::from_f64(1e-300).unwrap())
+                    .to_subset()
+                    .unwrap_or(large_cost),
+            );
+        } else {
+            cost_matrix.set(i, birth_missed_col, large_cost);
+        }
+
+        // Private columns can only be selected by their own row.
+        for other in 0..n_total {
+            if other != i {
+                cost_matrix.set(i, n_meas + other, large_cost);
+                cost_matrix.set(i, n_meas + n_total + other, large_cost);
             }
         }
     }
@@ -990,7 +940,6 @@ fn generate_hypotheses_from_assignment<
     for assignment in assignments {
         let mut output_tracks: Vec<GlmbTrack<T, N>> = Vec::new();
         let mut associations: Vec<Option<usize>> = Vec::new();
-        let mut log_weight_delta = T::zero();
 
         for (i, &col_opt) in assignment.mapping.iter().enumerate() {
             let col = match col_opt {
@@ -998,41 +947,26 @@ fn generate_hypotheses_from_assignment<
                 None => continue,
             };
 
-            let (track, is_birth, r_birth) = &augmented_tracks[i];
-            let p_d = detection_probs[i];
-
+            let (track, is_birth, _) = &augmented_tracks[i];
             if col < n_meas {
-                // Track detected with measurement col
-                if let Some((mean, cov, likelihood)) = &posteriors[i][col] {
+                if let Some((mean, covariance, _)) = &posteriors[i][col] {
                     output_tracks.push(GlmbTrack {
                         label: track.label,
-                        state: GaussianState::new(T::one(), *mean, *cov),
+                        state: GaussianState::new(T::one(), *mean, *covariance),
                     });
                     associations.push(Some(col));
-
-                    // Weight contribution
-                    let kappa = clutter_model.clutter_intensity(&measurements[col]);
-                    if *is_birth {
-                        log_weight_delta += ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
-                    } else {
-                        log_weight_delta += ComplexField::ln(p_d * *likelihood / kappa);
-                    }
                 }
-            } else if *is_birth {
-                // Miss column - Birth track NOT born - don't add to output
-                log_weight_delta +=
-                    ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
-            } else {
-                // Miss column - Existing track missed
+            } else if !*is_birth || col >= n_meas + n_total {
+                // Existing-track miss, or a birth that occurred but was missed.
                 output_tracks.push(track.clone());
                 associations.push(None);
-
-                log_weight_delta += ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
             }
+            // A birth assigned to its first private column did not occur.
         }
 
-        let new_log_weight =
-            hypothesis.log_weight + log_weight_delta - T::from(assignment.cost).unwrap();
+        // The assignment cost is -ln of the complete association
+        // contribution, so subtract it exactly once.
+        let new_log_weight = hypothesis.log_weight - T::from(assignment.cost).unwrap();
 
         result.push(GlmbHypothesis {
             log_weight: new_log_weight,
@@ -1110,16 +1044,8 @@ fn generate_hypotheses_ekf<
     }
 
     if n_total == 0 {
-        let clutter_log_weight: T = measurements
-            .iter()
-            .map(|z| ComplexField::ln(clutter_model.clutter_intensity(z)))
-            .fold(T::zero(), |acc, x| acc + x);
-
-        return vec![GlmbHypothesis {
-            log_weight: hypothesis.log_weight + clutter_log_weight,
-            tracks: Vec::new(),
-            current_association: Vec::new(),
-        }];
+        // Keep the same factored common-clutter convention as nonempty rows.
+        return vec![GlmbHypothesis::empty(hypothesis.log_weight)];
     }
 
     // Precompute posteriors using EKF linearization
@@ -1144,7 +1070,7 @@ fn generate_hypotheses_ekf<
 
             // EKF: Predicted measurement using nonlinear function
             let predicted_meas = observation_model.observe(&track.state.mean);
-            let innovation = measurement.innovation(predicted_meas);
+            let innovation = observation_model.innovation(measurement, &predicted_meas);
 
             let innovation_cov =
                 compute_innovation_covariance(&track.state.covariance, &obs_matrix, meas_noise);
@@ -1180,8 +1106,8 @@ fn generate_hypotheses_ekf<
         }
     }
 
-    // Build cost matrix (same structure as linear case)
-    let n_cols = n_meas + n_total;
+    // Build cost matrix (same private alternatives as the linear case).
+    let n_cols = n_meas + 2 * n_total;
     let mut cost_matrix = crate::assignment::CostMatrix::zeros(n_total, n_cols);
     let large_cost = 1e10_f64;
 
@@ -1189,10 +1115,10 @@ fn generate_hypotheses_ekf<
         let p_d = detection_probs[i];
 
         for (j, measurement) in measurements.iter().enumerate() {
-            let kappa = clutter_model.clutter_intensity(measurement);
+            let kappa = effective_clutter_intensity(clutter_model.clutter_intensity(measurement));
 
             let cost = if let Some((_, _, likelihood)) = posteriors[i][j] {
-                if likelihood > T::zero() && kappa > T::zero() {
+                if likelihood > T::zero() {
                     let ratio = if *is_birth {
                         p_d * likelihood * *r_birth / kappa
                     } else {
@@ -1213,29 +1139,41 @@ fn generate_hypotheses_ekf<
             cost_matrix.set(i, j, cost);
         }
 
-        let miss_col = n_meas + i;
-        let miss_cost = if *is_birth {
-            let one_minus_r = T::one() - *r_birth;
-            if one_minus_r > T::from_f64(1e-300).unwrap() {
-                -ComplexField::ln(one_minus_r).to_subset().unwrap_or(0.0)
-            } else {
-                large_cost
-            }
+        // The first private column is absence for a birth and a miss for an
+        // existing track. A birth also needs a distinct born-but-missed option.
+        let primary_col = n_meas + i;
+        let primary_probability = if *is_birth {
+            T::one() - *r_birth
         } else {
-            let one_minus_pd = T::one() - p_d;
-            if one_minus_pd > T::from_f64(1e-300).unwrap() {
-                -ComplexField::ln(one_minus_pd)
-                    .to_subset()
-                    .unwrap_or(large_cost)
-            } else {
-                large_cost
-            }
+            T::one() - p_d
         };
-        cost_matrix.set(i, miss_col, miss_cost);
+        cost_matrix.set(
+            i,
+            primary_col,
+            -ComplexField::ln(primary_probability + T::from_f64(1e-300).unwrap())
+                .to_subset()
+                .unwrap_or(large_cost),
+        );
 
-        for k in 0..n_total {
-            if k != i {
-                cost_matrix.set(i, n_meas + k, 1e20);
+        let birth_missed_col = n_meas + n_total + i;
+        if *is_birth {
+            let birth_missed_probability = *r_birth * (T::one() - p_d);
+            cost_matrix.set(
+                i,
+                birth_missed_col,
+                -ComplexField::ln(birth_missed_probability + T::from_f64(1e-300).unwrap())
+                    .to_subset()
+                    .unwrap_or(large_cost),
+            );
+        } else {
+            cost_matrix.set(i, birth_missed_col, large_cost);
+        }
+
+        // Private columns can only be selected by their own row.
+        for other in 0..n_total {
+            if other != i {
+                cost_matrix.set(i, n_meas + other, large_cost);
+                cost_matrix.set(i, n_meas + n_total + other, large_cost);
             }
         }
     }
@@ -1247,7 +1185,6 @@ fn generate_hypotheses_ekf<
     for assignment in assignments {
         let mut output_tracks: Vec<GlmbTrack<T, N>> = Vec::new();
         let mut associations: Vec<Option<usize>> = Vec::new();
-        let mut log_weight_delta = T::zero();
 
         for (i, &col_opt) in assignment.mapping.iter().enumerate() {
             let col = match col_opt {
@@ -1255,37 +1192,26 @@ fn generate_hypotheses_ekf<
                 None => continue,
             };
 
-            let (track, is_birth, r_birth) = &augmented_tracks[i];
-            let p_d = detection_probs[i];
-
+            let (track, is_birth, _) = &augmented_tracks[i];
             if col < n_meas {
-                if let Some((mean, cov, likelihood)) = &posteriors[i][col] {
+                if let Some((mean, covariance, _)) = &posteriors[i][col] {
                     output_tracks.push(GlmbTrack {
                         label: track.label,
-                        state: GaussianState::new(T::one(), *mean, *cov),
+                        state: GaussianState::new(T::one(), *mean, *covariance),
                     });
                     associations.push(Some(col));
-
-                    let kappa = clutter_model.clutter_intensity(&measurements[col]);
-                    if *is_birth {
-                        log_weight_delta += ComplexField::ln(p_d * *likelihood * *r_birth / kappa);
-                    } else {
-                        log_weight_delta += ComplexField::ln(p_d * *likelihood / kappa);
-                    }
                 }
-            } else if *is_birth {
-                log_weight_delta +=
-                    ComplexField::ln(T::one() - *r_birth + T::from_f64(1e-300).unwrap());
-            } else {
+            } else if !*is_birth || col >= n_meas + n_total {
+                // Existing-track miss, or a birth that occurred but was missed.
                 output_tracks.push(track.clone());
                 associations.push(None);
-
-                log_weight_delta += ComplexField::ln(T::one() - p_d + T::from_f64(1e-300).unwrap());
             }
+            // A birth assigned to its first private column did not occur.
         }
 
-        let new_log_weight =
-            hypothesis.log_weight + log_weight_delta - T::from(assignment.cost).unwrap();
+        // The assignment cost is -ln of the complete association
+        // contribution, so subtract it exactly once.
+        let new_log_weight = hypothesis.log_weight - T::from(assignment.cost).unwrap();
 
         result.push(GlmbHypothesis {
             log_weight: new_log_weight,
@@ -1520,11 +1446,7 @@ where
         measurements: &[Measurement<T, M>],
         dt: T,
     ) -> (GlmbFilterState<T, N, Updated>, UpdateStats) {
-        let config = super::types::GlmbUpdateConfig::new(
-            self.truncation.clone(),
-            self.k_best,
-            dt,
-        );
+        let config = super::types::GlmbUpdateConfig::new(self.truncation.clone(), self.k_best, dt);
         state.joint_predict_and_update(
             measurements,
             &self.transition,
@@ -1543,7 +1465,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::labels::BernoulliTrack;
     use crate::types::spaces::StateCovariance;
+
+    #[cfg(feature = "alloc")]
+    #[derive(Clone, Copy)]
+    struct CertainBirth;
+
+    #[cfg(feature = "alloc")]
+    impl LabeledBirthModel<f64, 4> for CertainBirth {
+        fn birth_tracks(&self, label_gen: &mut LabelGenerator) -> Vec<BernoulliTrack<f64, 4>> {
+            vec![BernoulliTrack::new(
+                label_gen.next_label(),
+                1.0,
+                GaussianState::new(
+                    1.0,
+                    StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                    StateCovariance::identity(),
+                ),
+            )]
+        }
+
+        fn expected_birth_count(&self) -> f64 {
+            1.0
+        }
+    }
 
     #[cfg(feature = "alloc")]
     #[test]
@@ -1582,6 +1528,271 @@ mod tests {
         let estimates = extract_best_hypothesis(&state);
         assert_eq!(estimates.len(), 1);
         assert_eq!(estimates[0].label, Label::new(0, 0));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_prediction_branches_actual_survival_and_death_probabilities() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::ConstantVelocity2D;
+
+        let transition = ConstantVelocity2D::new(0.0_f64, 0.25);
+        let track = GlmbTrack::new(
+            Label::new(0, 0),
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([10.0, 20.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let initial = GlmbFilterState::from_tracks(vec![track]);
+        let predicted = initial.clone().predict(&transition, &NoBirthModel, 1.0);
+
+        assert_eq!(predicted.density.hypotheses.len(), 2);
+        let death = predicted
+            .density
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks.is_empty())
+            .unwrap();
+        let survival = predicted
+            .density
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks.len() == 1)
+            .unwrap();
+        assert!((Float::exp(death.log_weight - survival.log_weight) - 3.0).abs() < 1e-12);
+        assert!((predicted.expected_target_count() - 0.25).abs() < 1e-12);
+        assert_eq!(survival.tracks[0].state.weight, 1.0);
+
+        let (joint, _) = initial.joint_predict_and_update(
+            &[],
+            &transition,
+            &crate::models::PositionSensor2D::new(1.0, 0.0),
+            &crate::models::UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0)),
+            &NoBirthModel,
+            &crate::filters::glmb::types::GlmbUpdateConfig::new(
+                GlmbTruncationConfig::new(-100.0, 10, None),
+                10,
+                1.0,
+            ),
+        );
+        assert!((joint.expected_target_count() - 0.25).abs() < 1e-12);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_assignment_contribution_is_applied_once() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+
+        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let observation = PositionSensor2D::new(1.0, 0.5);
+        let clutter = UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0));
+        let track = GlmbTrack::new(
+            Label::new(0, 0),
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([50.0, 50.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let predicted =
+            GlmbFilterState::from_tracks(vec![track]).predict(&transition, &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([50.0, 50.0])],
+            &observation,
+            &clutter,
+            &NoBirthModel,
+            &GlmbTruncationConfig::new(-100.0, 10, None),
+            10,
+        );
+
+        let detected = updated
+            .density
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.current_association == [Some(0)])
+            .unwrap();
+        let missed = updated
+            .density
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.current_association == [None])
+            .unwrap();
+        let actual_ratio = Float::exp(detected.log_weight - missed.log_weight);
+        let expected_ratio = (1.0 / (4.0 * core::f64::consts::PI)) / 0.0001;
+        assert!((actual_ratio / expected_ratio - 1.0).abs() < 1e-10);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_ekf_update_wraps_range_bearing_innovation() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, RangeBearingSensor, UniformClutterRangeBearing};
+
+        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let track = GlmbTrack::new(
+            Label::new(0, 0),
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([-100.0, 0.1, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let predicted =
+            GlmbFilterState::from_tracks(vec![track]).predict(&transition, &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update_ekf(
+            &[Measurement::from_array([
+                100.0,
+                -core::f64::consts::PI + 0.001,
+            ])],
+            &RangeBearingSensor::new(1.0, 0.1, 0.9),
+            &UniformClutterRangeBearing::new(
+                1.0,
+                (0.0, 50.0),
+                (-core::f64::consts::PI, core::f64::consts::PI),
+            ),
+            &NoBirthModel,
+            &GlmbTruncationConfig::new(-100.0, 10, None),
+            10,
+        );
+
+        assert!(updated.density.hypotheses.iter().any(|hypothesis| {
+            hypothesis.current_association == [Some(0)] && hypothesis.tracks.len() == 1
+        }));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_certain_birth_is_retained_when_born_but_missed() {
+        use crate::models::{PositionSensor2D, RangeBearingSensor, UniformClutter2D};
+
+        let transition = crate::models::ConstantVelocity2D::new(0.0_f64, 1.0);
+        let predicted = GlmbFilterState::new().predict(&transition, &CertainBirth, 0.0);
+        let (linear, _) = predicted.clone().update(
+            &[],
+            &PositionSensor2D::new(1.0, 0.0),
+            &UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0)),
+            &CertainBirth,
+            &GlmbTruncationConfig::new(-100.0, 10, None),
+            10,
+        );
+        assert_eq!(extract_best_hypothesis(&linear).len(), 1);
+
+        let (ekf, _) = predicted.update_ekf(
+            &[],
+            &RangeBearingSensor::new(1.0, 0.1, 0.0),
+            &crate::models::UniformClutterRangeBearing::new(
+                1.0,
+                (0.0, 100.0),
+                (-core::f64::consts::PI, core::f64::consts::PI),
+            ),
+            &CertainBirth,
+            &GlmbTruncationConfig::new(-100.0, 10, None),
+            10,
+        );
+        assert_eq!(extract_best_hypothesis(&ekf).len(), 1);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_zero_track_and_nonempty_hypotheses_share_factored_clutter_convention() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+
+        let track = GlmbTrack::new(
+            Label::new(0, 0),
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let initial = GlmbFilterState::from_hypotheses(vec![
+            GlmbHypothesis::empty(0.0),
+            GlmbHypothesis::new(0.0, vec![track], vec![None]),
+        ]);
+        let predicted = initial.predict(&ConstantVelocity2D::new(0.0, 1.0), &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([20.0, 20.0])],
+            &PositionSensor2D::new(1.0, 0.0),
+            &UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0)),
+            &NoBirthModel,
+            &GlmbTruncationConfig::new(-100.0, 10, None),
+            10,
+        );
+
+        let empty = updated
+            .density
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks.is_empty())
+            .unwrap();
+        let nonempty = updated
+            .density
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks.len() == 1)
+            .unwrap();
+        assert!(Float::abs(empty.log_weight - nonempty.log_weight) < 1e-12);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_out_of_support_clutter_still_allows_target_association() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+
+        let transition = ConstantVelocity2D::new(0.0_f64, 1.0);
+        let track = GlmbTrack::new(
+            Label::new(0, 0),
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        );
+        let initial = GlmbFilterState::from_tracks(vec![track]);
+        let measurement = Measurement::from_array([20.0, 20.0]);
+        let observation = PositionSensor2D::new(1.0, 0.9);
+        let clutter = UniformClutter2D::new(1.0, (0.0, 10.0), (0.0, 10.0));
+        let truncation = GlmbTruncationConfig::new(-100.0, 10, None);
+
+        let (standalone, _) = initial
+            .clone()
+            .predict(&transition, &NoBirthModel, 0.0)
+            .update(
+                &[measurement],
+                &observation,
+                &clutter,
+                &NoBirthModel,
+                &truncation,
+                10,
+            );
+        let standalone_best = standalone
+            .density
+            .hypotheses
+            .iter()
+            .max_by(|left, right| left.log_weight.partial_cmp(&right.log_weight).unwrap())
+            .unwrap();
+        assert_eq!(standalone_best.current_association, [Some(0)]);
+
+        let (joint, _) = initial.joint_predict_and_update(
+            &[measurement],
+            &transition,
+            &observation,
+            &clutter,
+            &NoBirthModel,
+            &crate::filters::glmb::types::GlmbUpdateConfig::new(truncation, 10, 0.0),
+        );
+        let joint_best = joint
+            .density
+            .hypotheses
+            .iter()
+            .max_by(|left, right| left.log_weight.partial_cmp(&right.log_weight).unwrap())
+            .unwrap();
+        assert_eq!(joint_best.current_association, [Some(0)]);
     }
 
     #[cfg(feature = "alloc")]
