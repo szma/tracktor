@@ -8,6 +8,18 @@ use num_traits::Float;
 
 use crate::types::spaces::Measurement;
 
+/// Returns a safe denominator for target-to-clutter likelihood ratios.
+///
+/// Finite-support clutter has exactly zero intensity outside its region, but a
+/// target may still generate such a measurement. Using the smallest positive
+/// normal value of the scalar type preserves that target-originated hypothesis
+/// while avoiding division by zero in ratio-based association algorithms.
+#[cfg(feature = "alloc")]
+pub(crate) fn effective_clutter_intensity<T: RealField + Float>(intensity: T) -> T {
+    let floor = <T as Float>::min_positive_value();
+    if intensity > floor { intensity } else { floor }
+}
+
 /// Trait for clutter models.
 ///
 /// Clutter represents false alarms - measurements that do not originate
@@ -44,6 +56,8 @@ pub struct UniformClutter<T: RealField, const M: usize> {
     clutter_rate: T,
     /// Volume of the surveillance region
     volume: T,
+    /// Finite support when constructed from explicit bounds.
+    bounds: Option<[(T, T); M]>,
 }
 
 impl<T: RealField + Float + Copy, const M: usize> UniformClutter<T, M> {
@@ -64,6 +78,7 @@ impl<T: RealField + Float + Copy, const M: usize> UniformClutter<T, M> {
         Self {
             clutter_rate,
             volume,
+            bounds: None,
         }
     }
 
@@ -89,7 +104,21 @@ impl<T: RealField + Float + Copy, const M: usize> UniformClutter<T, M> {
         Self {
             clutter_rate,
             volume,
+            bounds: Some(bounds),
         }
+    }
+
+    /// Checks whether a measurement lies in the finite support.
+    ///
+    /// Models created with [`Self::new`] describe an abstract surveillance
+    /// volume without coordinate bounds and therefore contain every coordinate.
+    pub fn contains(&self, measurement: &Measurement<T, M>) -> bool {
+        self.bounds.as_ref().is_none_or(|bounds| {
+            bounds.iter().enumerate().all(|(index, &(min, max))| {
+                let value = *measurement.index(index);
+                value >= min && value <= max
+            })
+        })
     }
 }
 
@@ -98,8 +127,12 @@ impl<T: RealField + Float + Copy, const M: usize> ClutterModel<T, M> for Uniform
         self.clutter_rate
     }
 
-    fn clutter_density(&self, _measurement: &Measurement<T, M>) -> T {
-        T::one() / self.volume
+    fn clutter_density(&self, measurement: &Measurement<T, M>) -> T {
+        if self.contains(measurement) {
+            T::one() / self.volume
+        } else {
+            T::zero()
+        }
     }
 }
 
@@ -156,8 +189,12 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 2> for UniformClutter2D<T> {
         self.clutter_rate
     }
 
-    fn clutter_density(&self, _measurement: &Measurement<T, 2>) -> T {
-        T::one() / self.area
+    fn clutter_density(&self, measurement: &Measurement<T, 2>) -> T {
+        if self.contains(measurement) {
+            T::one() / self.area
+        } else {
+            T::zero()
+        }
     }
 }
 
@@ -167,13 +204,10 @@ pub struct UniformClutter3D<T: RealField> {
     /// Expected number of clutter measurements per scan
     clutter_rate: T,
     /// X bounds (min, max)
-    #[allow(dead_code)]
     x_bounds: (T, T),
     /// Y bounds (min, max)
-    #[allow(dead_code)]
     y_bounds: (T, T),
     /// Z bounds (min, max)
-    #[allow(dead_code)]
     z_bounds: (T, T),
     /// Precomputed volume
     volume: T,
@@ -208,6 +242,20 @@ impl<T: RealField + Float + Copy> UniformClutter3D<T> {
             volume,
         }
     }
+
+    /// Checks if a measurement is within the surveillance region.
+    pub fn contains(&self, measurement: &Measurement<T, 3>) -> bool {
+        let x = *measurement.index(0);
+        let y = *measurement.index(1);
+        let z = *measurement.index(2);
+
+        x >= self.x_bounds.0
+            && x <= self.x_bounds.1
+            && y >= self.y_bounds.0
+            && y <= self.y_bounds.1
+            && z >= self.z_bounds.0
+            && z <= self.z_bounds.1
+    }
 }
 
 impl<T: RealField + Float + Copy> ClutterModel<T, 3> for UniformClutter3D<T> {
@@ -215,8 +263,12 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 3> for UniformClutter3D<T> {
         self.clutter_rate
     }
 
-    fn clutter_density(&self, _measurement: &Measurement<T, 3>) -> T {
-        T::one() / self.volume
+    fn clutter_density(&self, measurement: &Measurement<T, 3>) -> T {
+        if self.contains(measurement) {
+            T::one() / self.volume
+        } else {
+            T::zero()
+        }
     }
 }
 
@@ -233,8 +285,9 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 3> for UniformClutter3D<T> {
 /// - Range bounds: [r_min, r_max]
 /// - Bearing bounds: [θ_min, θ_max] in radians
 ///
-/// The "volume" in polar coordinates is the area of the annular sector:
-/// area = 0.5 * (r_max² - r_min²) * (θ_max - θ_min)
+/// The density is uniform with respect to the sensor's `[range, bearing]`
+/// measurement coordinates. Its measurement-space volume is therefore
+/// `(r_max - r_min) * (θ_max - θ_min)`.
 #[derive(Debug, Clone)]
 pub struct UniformClutterRangeBearing<T: RealField> {
     /// Expected number of clutter measurements per scan
@@ -243,8 +296,8 @@ pub struct UniformClutterRangeBearing<T: RealField> {
     range_bounds: (T, T),
     /// Bearing bounds (min, max) in radians, typically [-π, π] or [0, 2π]
     bearing_bounds: (T, T),
-    /// Precomputed area of the annular sector
-    area: T,
+    /// Precomputed range-bearing measurement-space volume
+    measurement_volume: T,
 }
 
 impl<T: RealField + Float + Copy> UniformClutterRangeBearing<T> {
@@ -259,7 +312,9 @@ impl<T: RealField + Float + Copy> UniformClutterRangeBearing<T> {
     /// Panics if bounds are invalid or clutter_rate is negative.
     ///
     /// # Example
-    /// ```ignore
+    /// ```no_run
+    /// use tracktor::prelude::*;
+    ///
     /// // Clutter in a radar field of view: range 0-1000m, bearing ±60°
     /// let clutter = UniformClutterRangeBearing::new(
     ///     10.0,                    // 10 expected false alarms per scan
@@ -285,18 +340,14 @@ impl<T: RealField + Float + Copy> UniformClutterRangeBearing<T> {
             "bearing_bounds must have max > min"
         );
 
-        // Area of annular sector: 0.5 * (r_max² - r_min²) * Δθ
-        let r_min_sq = range_bounds.0 * range_bounds.0;
-        let r_max_sq = range_bounds.1 * range_bounds.1;
-        let delta_theta = bearing_bounds.1 - bearing_bounds.0;
-        let half = T::from_f64(0.5).unwrap();
-        let area = half * (r_max_sq - r_min_sq) * delta_theta;
+        let measurement_volume =
+            (range_bounds.1 - range_bounds.0) * (bearing_bounds.1 - bearing_bounds.0);
 
         Self {
             clutter_rate,
             range_bounds,
             bearing_bounds,
-            area,
+            measurement_volume,
         }
     }
 
@@ -327,8 +378,12 @@ impl<T: RealField + Float + Copy> ClutterModel<T, 2> for UniformClutterRangeBear
         self.clutter_rate
     }
 
-    fn clutter_density(&self, _measurement: &Measurement<T, 2>) -> T {
-        T::one() / self.area
+    fn clutter_density(&self, measurement: &Measurement<T, 2>) -> T {
+        if self.contains(measurement) {
+            T::one() / self.measurement_volume
+        } else {
+            T::zero()
+        }
     }
 }
 
@@ -429,6 +484,23 @@ mod tests {
     }
 
     #[test]
+    fn test_uniform_clutter_3d_contains() {
+        let clutter = UniformClutter3D::new(10.0_f64, (0.0, 100.0), (-50.0, 50.0), (10.0, 20.0));
+
+        let inside = Measurement::from_array([50.0, 0.0, 15.0]);
+        let on_boundary = Measurement::from_array([0.0, 50.0, 20.0]);
+        let outside_x = Measurement::from_array([101.0, 0.0, 15.0]);
+        let outside_y = Measurement::from_array([50.0, -51.0, 15.0]);
+        let outside_z = Measurement::from_array([50.0, 0.0, 9.0]);
+
+        assert!(clutter.contains(&inside));
+        assert!(clutter.contains(&on_boundary));
+        assert!(!clutter.contains(&outside_x));
+        assert!(!clutter.contains(&outside_y));
+        assert!(!clutter.contains(&outside_z));
+    }
+
+    #[test]
     fn test_clutter_intensity() {
         let clutter = UniformClutter2D::new(10.0_f64, (0.0, 100.0), (0.0, 100.0));
         let measurement = Measurement::from_array([50.0, 50.0]);
@@ -447,10 +519,10 @@ mod tests {
 
         assert!((clutter.clutter_rate() - 10.0).abs() < 1e-10);
 
-        // Area = 0.5 * (100² - 0²) * 2π = 0.5 * 10000 * 2π = 10000π ≈ 31415.93
-        let expected_area = 0.5 * 10000.0 * 2.0 * PI;
+        // Uniform in [range, bearing] measurement coordinates.
+        let expected_volume = 100.0 * 2.0 * PI;
         let density = clutter.clutter_density(&Measurement::from_array([50.0, 0.0]));
-        let expected_density = 1.0 / expected_area;
+        let expected_density = 1.0 / expected_volume;
 
         assert!(
             (density - expected_density).abs() < 1e-10,
@@ -485,6 +557,27 @@ mod tests {
     }
 
     #[test]
+    fn test_uniform_clutter_density_is_zero_outside_support() {
+        let rectangular = UniformClutter2D::new(1.0_f64, (0.0, 1.0), (0.0, 1.0));
+        assert_eq!(
+            rectangular.clutter_density(&Measurement::from_array([2.0, 0.5])),
+            0.0
+        );
+
+        let generic = UniformClutter::<f64, 2>::from_bounds(1.0, [(0.0, 1.0), (0.0, 2.0)]);
+        assert_eq!(
+            generic.clutter_density(&Measurement::from_array([0.5, 3.0])),
+            0.0
+        );
+
+        let polar = UniformClutterRangeBearing::new(1.0, (0.0, 10.0), (-1.0, 1.0));
+        assert_eq!(
+            polar.clutter_density(&Measurement::from_array([11.0, 0.0])),
+            0.0
+        );
+    }
+
+    #[test]
     fn test_range_bearing_clutter_full_circle() {
         let clutter = UniformClutterRangeBearing::full_circle(5.0_f64, 200.0);
 
@@ -493,5 +586,26 @@ mod tests {
         // Should contain any point within range
         let inside = Measurement::from_array([100.0, 3.0]); // ~172°
         assert!(clutter.contains(&inside));
+    }
+
+    #[test]
+    fn test_effective_clutter_intensity_f32_is_positive_outside_support() {
+        let clutter = UniformClutter2D::new(1.0_f32, (0.0, 1.0), (0.0, 1.0));
+        let outside = Measurement::from_array([2.0, 0.5]);
+
+        let intensity = clutter.clutter_intensity(&outside);
+        assert_eq!(intensity, 0.0);
+
+        let effective = effective_clutter_intensity(intensity);
+        assert_eq!(effective, f32::MIN_POSITIVE);
+        assert!(effective.is_finite());
+        assert!(effective > 0.0);
+    }
+
+    #[test]
+    fn test_effective_clutter_intensity_preserves_representable_f32_intensity() {
+        let intensity = 1.0e-20_f32;
+
+        assert_eq!(effective_clutter_intensity(intensity), intensity);
     }
 }

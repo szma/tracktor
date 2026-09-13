@@ -6,7 +6,7 @@ mod common;
 
 use common::{make_component, make_measurement, make_test_models};
 use tracktor::filters::cphd::{
-    extract_by_expected_cardinality, extract_by_map_cardinality, GmCphdFilter,
+    GmCphdFilter, extract_by_expected_cardinality, extract_by_map_cardinality,
 };
 use tracktor::types::spaces::Measurement;
 

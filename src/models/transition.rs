@@ -43,15 +43,18 @@ pub trait TransitionModel<T: RealField, const N: usize> {
 ///
 /// # Example
 ///
-/// ```ignore
-/// // Coordinated turn model
-/// let model = CoordinatedTurn2D::new(noise, turn_noise, survival);
+/// ```no_run
+/// use tracktor::prelude::*;
+///
+/// let model = CoordinatedTurn2D::new(1.0, 0.1, 0.99);
+/// let state = StateVector::<f64, 5>::from_array([100.0, 200.0, 10.0, 5.0, 0.1]);
+/// let dt = 1.0;
 ///
 /// // Nonlinear prediction
 /// let x_pred = model.predict_nonlinear(&state, dt);
 ///
 /// // Jacobian for linearization (EKF)
-/// let F = model.jacobian_at(&state, dt);
+/// let f = model.jacobian_at(&state, dt);
 /// ```
 pub trait NonlinearTransitionModel<T: RealField, const N: usize>: TransitionModel<T, N> {
     /// Applies the nonlinear transition function: x_{k+1} = f(x_k, dt)
@@ -338,8 +341,22 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
         let eps = T::from_f64(1e-5).unwrap();
 
         if num_traits::Float::abs(omega) < eps {
-            // Nearly zero turn rate - use constant velocity
-            StateVector::from_array([x + vx * dt, y + vy * dt, vx, vy, omega])
+            // Series-expanded turn dynamics keep the model smooth at omega=0.
+            let omega_sq = omega * omega;
+            let dt_sq = dt * dt;
+            let sinc = dt - omega_sq * dt_sq * dt / T::from_f64(6.0).unwrap();
+            let one_minus_cos_over_omega = omega * dt_sq / T::from_f64(2.0).unwrap()
+                - omega * omega_sq * dt_sq * dt_sq / T::from_f64(24.0).unwrap();
+            let sin_omega_dt = Float::sin(omega_dt);
+            let cos_omega_dt = Float::cos(omega_dt);
+
+            StateVector::from_array([
+                x + vx * sinc - vy * one_minus_cos_over_omega,
+                y + vx * one_minus_cos_over_omega + vy * sinc,
+                vx * cos_omega_dt - vy * sin_omega_dt,
+                vx * sin_omega_dt + vy * cos_omega_dt,
+                omega,
+            ])
         } else {
             // Apply coordinated turn dynamics
             // The rotation matrix for velocity is:
@@ -347,15 +364,15 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
             // [sin(ωΔt)   cos(ωΔt)]
             //
             // Position change is the integral of velocity over the turn:
-            // Δx = (1/ω)[vx·sin(ωΔt) - vy·(cos(ωΔt) - 1)]
-            //    = (1/ω)[vx·sin(ωΔt) + vy·(1 - cos(ωΔt))]
+            // Δx = (1/ω)[vx·sin(ωΔt) + vy·(cos(ωΔt) - 1)]
+            //    = (1/ω)[vx·sin(ωΔt) - vy·(1 - cos(ωΔt))]
             // Δy = (1/ω)[vx·(1 - cos(ωΔt)) + vy·sin(ωΔt)]
             let sin_omega_dt = num_traits::Float::sin(omega_dt);
             let cos_omega_dt = num_traits::Float::cos(omega_dt);
             let one_minus_cos = T::one() - cos_omega_dt;
 
             // New position
-            let x_new = x + (vx * sin_omega_dt + vy * one_minus_cos) / omega;
+            let x_new = x + (vx * sin_omega_dt - vy * one_minus_cos) / omega;
             let y_new = y + (vx * one_minus_cos + vy * sin_omega_dt) / omega;
 
             // New velocity (rotation of velocity vector)
@@ -387,12 +404,27 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
         let zero = T::zero();
 
         if num_traits::Float::abs(omega) < eps {
-            // Jacobian for constant velocity (ω ≈ 0)
+            let omega_sq = omega * omega;
+            let dt_sq = dt * dt;
+            let dt_cubed = dt_sq * dt;
+            let sinc = dt - omega_sq * dt_cubed / T::from_f64(6.0).unwrap();
+            let one_minus_cos_over_omega = omega * dt_sq / T::from_f64(2.0).unwrap()
+                - omega * omega_sq * dt_sq * dt_sq / T::from_f64(24.0).unwrap();
+            let sinc_derivative = -omega * dt_cubed / T::from_f64(3.0).unwrap();
+            let turn_derivative = dt_sq / T::from_f64(2.0).unwrap()
+                - omega_sq * dt_sq * dt_sq / T::from_f64(8.0).unwrap();
+            let sin_omega_dt = Float::sin(omega_dt);
+            let cos_omega_dt = Float::cos(omega_dt);
+            let dx_domega = vx * sinc_derivative - vy * turn_derivative;
+            let dy_domega = vx * turn_derivative + vy * sinc_derivative;
+            let dvx_domega = -vx * dt * sin_omega_dt - vy * dt * cos_omega_dt;
+            let dvy_domega = vx * dt * cos_omega_dt - vy * dt * sin_omega_dt;
+
             TransitionMatrix::from_matrix(nalgebra::matrix![
-                one, zero, dt, zero, zero;
-                zero, one, zero, dt, zero;
-                zero, zero, one, zero, zero;
-                zero, zero, zero, one, zero;
+                one, zero, sinc, -one_minus_cos_over_omega, dx_domega;
+                zero, one, one_minus_cos_over_omega, sinc, dy_domega;
+                zero, zero, cos_omega_dt, -sin_omega_dt, dvx_domega;
+                zero, zero, sin_omega_dt, cos_omega_dt, dvy_domega;
                 zero, zero, zero, zero, one
             ])
         } else {
@@ -402,17 +434,17 @@ impl<T: RealField + Float + Copy> CoordinatedTurn2D<T> {
             let omega_sq = omega * omega;
 
             // Partial derivatives for position w.r.t. velocity
-            // x_new = x + (vx * sin + vy * (1-cos)) / omega
+            // x_new = x + (vx * sin - vy * (1-cos)) / omega
             // y_new = y + (vx * (1-cos) + vy * sin) / omega
             let dx_dvx = sin_omega_dt / omega;
-            let dx_dvy = one_minus_cos / omega;
+            let dx_dvy = -one_minus_cos / omega;
             let dy_dvx = one_minus_cos / omega;
             let dy_dvy = sin_omega_dt / omega;
 
             // Partial derivatives w.r.t. omega (using quotient rule)
-            // For x: d/dω [(vx*sin(ωt) + vy*(1-cos(ωt)))/ω]
+            // For x: d/dω [(vx*sin(ωt) - vy*(1-cos(ωt)))/ω]
             let dx_domega = (vx * (omega_dt * cos_omega_dt - sin_omega_dt)
-                + vy * (omega_dt * sin_omega_dt - one_minus_cos))
+                + vy * (one_minus_cos - omega_dt * sin_omega_dt))
                 / omega_sq;
             // For y: d/dω [(vx*(1-cos(ωt)) + vy*sin(ωt))/ω]
             let dy_domega = (vx * (omega_dt * sin_omega_dt - one_minus_cos)
@@ -581,6 +613,31 @@ mod tests {
             "vy: {} should be ~10",
             predicted.index(3)
         );
+    }
+
+    #[test]
+    fn test_coordinated_turn_with_lateral_velocity() {
+        use std::f64::consts::FRAC_PI_2;
+
+        let model = CoordinatedTurn2D::new(1.0_f64, 0.1, 0.99);
+        let state = StateVector::from_array([0.0, 0.0, 0.0, 10.0, FRAC_PI_2]);
+        let predicted = model.predict_nonlinear(&state, 1.0);
+        let radius = 10.0 / FRAC_PI_2;
+
+        assert!((predicted.index(0) + radius).abs() < 1e-6);
+        assert!((predicted.index(1) - radius).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_coordinated_turn_zero_rate_jacobian_limit() {
+        let model = CoordinatedTurn2D::new(1.0_f64, 0.1, 0.99);
+        let state = StateVector::from_array([0.0, 0.0, 8.0, 4.0, 0.0]);
+        let jacobian = model.transition_matrix_at(&state, 2.0);
+
+        assert!((jacobian.as_matrix()[(0, 4)] + 8.0).abs() < 1e-12);
+        assert!((jacobian.as_matrix()[(1, 4)] - 16.0).abs() < 1e-12);
+        assert!((jacobian.as_matrix()[(2, 4)] + 8.0).abs() < 1e-12);
+        assert!((jacobian.as_matrix()[(3, 4)] - 16.0).abs() < 1e-12);
     }
 
     #[test]

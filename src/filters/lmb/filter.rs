@@ -22,8 +22,11 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::cardinality::map_cardinality_estimate;
-use super::types::{LmbTrack, LmbTrackSet, PosteriorGrid};
-use crate::models::{ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel};
+use super::types::{LmbTrack, LmbTrackSet};
+use crate::models::{
+    ClutterModel, NonlinearObservationModel, ObservationModel, TransitionModel,
+    effective_clutter_intensity,
+};
 use crate::types::gaussian::GaussianState;
 use crate::types::labels::{BernoulliTrack, Label, LabelGenerator};
 use crate::types::phase::{Predicted, UpdateStats, Updated};
@@ -351,7 +354,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         let meas_noise = observation_model.measurement_noise();
 
         // Precompute posteriors and likelihoods for all track-measurement pairs
-        let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
+        #[allow(clippy::type_complexity)]
+        let mut posteriors: Vec<Vec<Vec<(StateVector<T, N>, StateCovariance<T, N>, T)>>> =
+            vec![vec![Vec::new(); n_meas]; n_tracks];
         let mut likelihood_matrix: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
         let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
 
@@ -366,11 +371,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             detection_probs.push(p_d);
 
             for (j, measurement) in measurements.iter().enumerate() {
-                // Sum likelihood over all components
+                // Sum likelihood over all components and retain each conditional mode.
                 let mut total_likelihood = T::zero();
-                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> =
-                    None;
-                let mut best_weight = T::zero();
 
                 for component in track.components.iter() {
                     let predicted_meas = obs_matrix.observe(&component.mean);
@@ -393,36 +395,28 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                     }
 
                     let weighted_likelihood = component.weight * likelihood;
-                    total_likelihood += weighted_likelihood;
+                    if let Some(kalman_gain) =
+                        compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
+                    {
+                        let correction = kalman_gain.correct(&innovation);
+                        let updated_mean = StateVector::from_svector(
+                            component.mean.as_svector() + correction.as_svector(),
+                        );
+                        let updated_cov = joseph_update(
+                            &component.covariance,
+                            &kalman_gain,
+                            &obs_matrix,
+                            &meas_noise,
+                        );
 
-                    // Track best posterior for this component
-                    if weighted_likelihood > best_weight {
-                        if let Some(kalman_gain) =
-                            compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
-                        {
-                            let correction = kalman_gain.correct(&innovation);
-                            let updated_mean = StateVector::from_svector(
-                                component.mean.as_svector() + correction.as_svector(),
-                            );
-                            let updated_cov = joseph_update(
-                                &component.covariance,
-                                &kalman_gain,
-                                &obs_matrix,
-                                &meas_noise,
-                            );
-
-                            best_posterior = Some((updated_mean, updated_cov, likelihood));
-                            best_weight = weighted_likelihood;
-                        } else {
-                            stats.singular_covariance_count += 1;
-                        }
+                        total_likelihood += weighted_likelihood;
+                        posteriors[i][j].push((updated_mean, updated_cov, weighted_likelihood));
+                    } else {
+                        stats.singular_covariance_count += 1;
                     }
                 }
 
                 likelihood_matrix[i][j] = total_likelihood;
-                if let Some(posterior) = best_posterior {
-                    posteriors.set(i, j, posterior);
-                }
             }
         }
 
@@ -471,14 +465,17 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             // Detection components (one for each measurement)
             for j in 0..n_meas {
                 let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
-                if det_weight > T::from(1e-10).unwrap()
-                    && let Some((mean, cov, _)) = posteriors.get(i, j)
-                {
-                    new_components.push(GaussianState {
-                        weight: det_weight,
-                        mean: *mean,
-                        covariance: *cov,
-                    });
+                if det_weight > T::from(1e-10).unwrap() {
+                    let measurement_likelihood = likelihood_matrix[i][j];
+                    if measurement_likelihood > T::zero() {
+                        for (mean, covariance, weighted_likelihood) in &posteriors[i][j] {
+                            new_components.push(GaussianState {
+                                weight: det_weight * *weighted_likelihood / measurement_likelihood,
+                                mean: *mean,
+                                covariance: *covariance,
+                            });
+                        }
+                    }
                 }
             }
 
@@ -608,7 +605,9 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
         let meas_noise = observation_model.measurement_noise();
 
         // Precompute posteriors and likelihoods for all track-measurement pairs
-        let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
+        #[allow(clippy::type_complexity)]
+        let mut posteriors: Vec<Vec<Vec<(StateVector<T, N>, StateCovariance<T, N>, T)>>> =
+            vec![vec![Vec::new(); n_meas]; n_tracks];
         let mut likelihood_matrix: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
         let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
 
@@ -623,11 +622,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             detection_probs.push(p_d);
 
             for (j, measurement) in measurements.iter().enumerate() {
-                // Sum likelihood over all components
+                // Sum likelihood over all components and retain each conditional mode.
                 let mut total_likelihood = T::zero();
-                let mut best_posterior: Option<(StateVector<T, N>, StateCovariance<T, N>, T)> =
-                    None;
-                let mut best_weight = T::zero();
 
                 for component in track.components.iter() {
                     // EKF: Linearize at component mean
@@ -644,7 +640,7 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                     let predicted_meas = observation_model.observe(&component.mean);
 
                     // Innovation in measurement space: y = z - h(x)
-                    let innovation = measurement.innovation(predicted_meas);
+                    let innovation = observation_model.innovation(measurement, &predicted_meas);
 
                     let innovation_cov = compute_innovation_covariance(
                         &component.covariance,
@@ -664,36 +660,28 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
                     }
 
                     let weighted_likelihood = component.weight * likelihood;
-                    total_likelihood += weighted_likelihood;
+                    if let Some(kalman_gain) =
+                        compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
+                    {
+                        let correction = kalman_gain.correct(&innovation);
+                        let updated_mean = StateVector::from_svector(
+                            component.mean.as_svector() + correction.as_svector(),
+                        );
+                        let updated_cov = joseph_update(
+                            &component.covariance,
+                            &kalman_gain,
+                            &obs_matrix,
+                            &meas_noise,
+                        );
 
-                    // Track best posterior for this component
-                    if weighted_likelihood > best_weight {
-                        if let Some(kalman_gain) =
-                            compute_kalman_gain(&component.covariance, &obs_matrix, &innovation_cov)
-                        {
-                            let correction = kalman_gain.correct(&innovation);
-                            let updated_mean = StateVector::from_svector(
-                                component.mean.as_svector() + correction.as_svector(),
-                            );
-                            let updated_cov = joseph_update(
-                                &component.covariance,
-                                &kalman_gain,
-                                &obs_matrix,
-                                &meas_noise,
-                            );
-
-                            best_posterior = Some((updated_mean, updated_cov, likelihood));
-                            best_weight = weighted_likelihood;
-                        } else {
-                            stats.singular_covariance_count += 1;
-                        }
+                        total_likelihood += weighted_likelihood;
+                        posteriors[i][j].push((updated_mean, updated_cov, weighted_likelihood));
+                    } else {
+                        stats.singular_covariance_count += 1;
                     }
                 }
 
                 likelihood_matrix[i][j] = total_likelihood;
-                if let Some(posterior) = best_posterior {
-                    posteriors.set(i, j, posterior);
-                }
             }
         }
 
@@ -742,14 +730,17 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
             // Detection components (one for each measurement)
             for j in 0..n_meas {
                 let det_weight = marginal_weights[i][j + 1]; // +1 because index 0 is miss
-                if det_weight > T::from(1e-10).unwrap()
-                    && let Some((mean, cov, _)) = posteriors.get(i, j)
-                {
-                    new_components.push(GaussianState {
-                        weight: det_weight,
-                        mean: *mean,
-                        covariance: *cov,
-                    });
+                if det_weight > T::from(1e-10).unwrap() {
+                    let measurement_likelihood = likelihood_matrix[i][j];
+                    if measurement_likelihood > T::zero() {
+                        for (mean, covariance, weighted_likelihood) in &posteriors[i][j] {
+                            new_components.push(GaussianState {
+                                weight: det_weight * *weighted_likelihood / measurement_likelihood,
+                                mean: *mean,
+                                covariance: *covariance,
+                            });
+                        }
+                    }
                 }
             }
 
@@ -779,6 +770,43 @@ impl<T: RealField + Float + Copy, const N: usize> LmbFilterState<T, N, Predicted
 // ============================================================================
 // Loopy Belief Propagation
 // ============================================================================
+
+#[cfg(feature = "alloc")]
+fn log_add_exp<T: RealField + Float + Copy>(left: T, right: T) -> T {
+    if left == T::infinity() || right == T::infinity() {
+        return T::infinity();
+    }
+    if left == T::neg_infinity() {
+        return right;
+    }
+    if right == T::neg_infinity() {
+        return left;
+    }
+
+    let maximum = if left > right { left } else { right };
+    let minimum = if left > right { right } else { left };
+    maximum + Float::ln(T::one() + Float::exp(minimum - maximum))
+}
+
+#[cfg(feature = "alloc")]
+fn log_positive<T: RealField + Float + Copy>(value: T) -> T {
+    if value > T::zero() {
+        Float::ln(value)
+    } else {
+        T::neg_infinity()
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn subtract_logs<T: RealField + Float + Copy>(numerator: T, denominator: T) -> T {
+    if numerator == T::neg_infinity() || denominator == T::infinity() {
+        T::neg_infinity()
+    } else if denominator == T::neg_infinity() {
+        T::infinity()
+    } else {
+        numerator - denominator
+    }
+}
 
 /// Performs Loopy Belief Propagation for data association.
 ///
@@ -835,97 +863,91 @@ fn loopy_belief_propagation<
         .map(|z| clutter_model.clutter_intensity(z))
         .collect();
 
-    // Compute phi vector: phi[i] = r * (1 - p_d)
-    let phi: Vec<T> = existence_probs
-        .iter()
-        .zip(detection_probs.iter())
-        .map(|(&r, &p_d)| r * (T::one() - p_d))
-        .collect();
-
-    // Compute eta vector: eta[i] = 1 - r * p_d
+    // eta[i] = 1 - r * p_d. Work with q = eta * psi = r*p_d*L/kappa
+    // rather than psi itself. Besides avoiding overflow, this remains defined
+    // at the valid boundary r = p_d = 1 where eta is exactly zero.
     let eta: Vec<T> = existence_probs
         .iter()
         .zip(detection_probs.iter())
         .map(|(&r, &p_d)| T::one() - r * p_d)
         .collect();
-
-    // Compute psi matrix: psi[i][j] = r * p_d * L[i][j] / (kappa[j] * eta[i])
-    let mut psi: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
+    let mut log_q: Vec<Vec<T>> = vec![vec![T::neg_infinity(); n_meas]; n_tracks];
     for i in 0..n_tracks {
-        let r = existence_probs[i];
-        let p_d = detection_probs[i];
+        let log_r = log_positive(existence_probs[i]);
+        let log_p_d = log_positive(detection_probs[i]);
         for j in 0..n_meas {
-            let kappa = clutter_intensities[j];
-            if kappa > T::zero() && eta[i] > T::zero() {
-                psi[i][j] = r * p_d * likelihood_matrix[i][j] / (kappa * eta[i]);
+            let kappa = effective_clutter_intensity(clutter_intensities[j]);
+            let likelihood = likelihood_matrix[i][j];
+            if likelihood > T::zero() && log_r != T::neg_infinity() && log_p_d != T::neg_infinity()
+            {
+                log_q[i][j] = log_r + log_p_d + Float::ln(likelihood) - Float::ln(kappa);
             }
         }
     }
 
-    // Initialize messages: sigma[i][j] = 1
-    let mut sigma_mt: Vec<Vec<T>> = vec![vec![T::one(); n_tracks]; n_meas];
-    let mut sigma_tm: Vec<Vec<T>> = vec![vec![T::one(); n_meas]; n_tracks];
+    // log_sigma_mt[j][i] and log_sigma_tm[i][j] both start at ln(1).
+    let mut log_sigma_mt: Vec<Vec<T>> = vec![vec![T::zero(); n_tracks]; n_meas];
+    let mut log_sigma_tm: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
 
-    // LBP iterations - track convergence and iteration count
     let mut lbp_converged = false;
     let mut lbp_iterations = 0usize;
 
     for iter in 0..max_iterations {
         lbp_iterations = iter + 1;
-        let sigma_mt_old = sigma_mt.clone();
+        let log_sigma_mt_old = log_sigma_mt.clone();
 
-        // Compute B = psi .* sigma_mt (element-wise)
-        // B[i][j] = psi[i][j] * sigma_mt[j][i]
-        let mut b: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
+        let mut log_q_sigma: Vec<Vec<T>> = vec![vec![T::neg_infinity(); n_meas]; n_tracks];
         for i in 0..n_tracks {
             for j in 0..n_meas {
-                b[i][j] = psi[i][j] * sigma_mt[j][i];
+                log_q_sigma[i][j] = log_q[i][j] + log_sigma_mt[j][i];
             }
         }
 
-        // Compute row sums of B
-        let b_row_sums: Vec<T> = b
-            .iter()
-            .map(|row| row.iter().fold(T::zero(), |acc, &x| acc + x))
-            .collect();
-
-        // Update sigma_tm: sigma_tm[i][j] = psi[i][j] / (-B[i][j] + rowsum(B[i]) + 1)
+        // Multiplying the usual message equation by eta gives
+        // sigma_tm[i][j] = q[i][j] / (eta[i] + sum_{k != j} q[i][k]*sigma_mt[k][i]).
+        // This is algebraically equivalent when eta > 0 and has the correct
+        // limiting behavior when eta = 0.
+        let mut prefix_meas = vec![T::neg_infinity(); n_meas + 1];
+        let mut suffix_meas = vec![T::neg_infinity(); n_meas + 1];
         for i in 0..n_tracks {
+            prefix_meas[0] = log_positive(eta[i]);
+            suffix_meas[n_meas] = T::neg_infinity();
             for j in 0..n_meas {
-                let denom = -b[i][j] + b_row_sums[i] + T::one();
-                sigma_tm[i][j] = if denom > T::zero() {
-                    psi[i][j] / denom
-                } else {
-                    T::one()
-                };
+                prefix_meas[j + 1] = log_add_exp(prefix_meas[j], log_q_sigma[i][j]);
+            }
+            for j in (0..n_meas).rev() {
+                suffix_meas[j] = log_add_exp(log_q_sigma[i][j], suffix_meas[j + 1]);
+            }
+            for j in 0..n_meas {
+                let log_denominator = log_add_exp(prefix_meas[j], suffix_meas[j + 1]);
+                log_sigma_tm[i][j] = subtract_logs(log_q[i][j], log_denominator);
             }
         }
 
-        // Compute column sums of sigma_tm
-        let mut sigma_tm_col_sums: Vec<T> = vec![T::zero(); n_meas];
-        for row in sigma_tm.iter().take(n_tracks) {
-            for j in 0..n_meas {
-                sigma_tm_col_sums[j] += row[j];
-            }
-        }
-
-        // Update sigma_mt: sigma_mt[j][i] = 1 / (-sigma_tm[i][j] + colsum(sigma_tm[j]) + 1)
+        // sigma_mt[j][i] = 1 / (1 + sum_{k != i} sigma_tm[k][j]).
+        let mut prefix_tracks = vec![T::neg_infinity(); n_tracks + 1];
+        let mut suffix_tracks = vec![T::neg_infinity(); n_tracks + 1];
         for j in 0..n_meas {
+            prefix_tracks[0] = T::zero();
+            suffix_tracks[n_tracks] = T::neg_infinity();
             for i in 0..n_tracks {
-                let denom = -sigma_tm[i][j] + sigma_tm_col_sums[j] + T::one();
-                sigma_mt[j][i] = if denom > T::zero() {
-                    T::one() / denom
-                } else {
-                    T::one()
-                };
+                prefix_tracks[i + 1] = log_add_exp(prefix_tracks[i], log_sigma_tm[i][j]);
+            }
+            for i in (0..n_tracks).rev() {
+                suffix_tracks[i] = log_add_exp(log_sigma_tm[i][j], suffix_tracks[i + 1]);
+            }
+            for i in 0..n_tracks {
+                let log_denominator = log_add_exp(prefix_tracks[i], suffix_tracks[i + 1]);
+                log_sigma_mt[j][i] = -log_denominator;
             }
         }
 
-        // Check convergence
         let mut max_delta = T::zero();
         for j in 0..n_meas {
             for i in 0..n_tracks {
-                let delta = ComplexField::abs(sigma_mt[j][i] - sigma_mt_old[j][i]);
+                let current = Float::exp(log_sigma_mt[j][i]);
+                let previous = Float::exp(log_sigma_mt_old[j][i]);
+                let delta = ComplexField::abs(current - previous);
                 if delta > max_delta {
                     max_delta = delta;
                 }
@@ -937,43 +959,53 @@ fn loopy_belief_propagation<
         }
     }
 
-    // Compute final B matrix
-    let mut b: Vec<Vec<T>> = vec![vec![T::zero(); n_meas]; n_tracks];
-    for i in 0..n_tracks {
-        for j in 0..n_meas {
-            b[i][j] = psi[i][j] * sigma_mt[j][i];
-        }
-    }
-
-    // Compute Gamma matrix: Gamma[i] = [phi[i], B[i] * eta[i]]
-    // Then W[i] = Gamma[i] / sum(Gamma[i])
     let mut marginal_weights: Vec<Vec<T>> = Vec::with_capacity(n_tracks);
     let mut updated_existence: Vec<T> = Vec::with_capacity(n_tracks);
 
     for i in 0..n_tracks {
-        let mut gamma = Vec::with_capacity(n_meas + 1);
-        gamma.push(phi[i]); // Miss detection
-
-        for b_val in b[i].iter().take(n_meas) {
-            gamma.push(*b_val * eta[i]);
+        let log_eta = log_positive(eta[i]);
+        let log_phi = log_positive(existence_probs[i] * (T::one() - detection_probs[i]));
+        let mut log_gamma = Vec::with_capacity(n_meas + 1);
+        log_gamma.push(log_phi);
+        for j in 0..n_meas {
+            log_gamma.push(log_q[i][j] + log_sigma_mt[j][i]);
         }
 
-        let gamma_sum: T = gamma.iter().fold(T::zero(), |acc, &x| acc + x);
-
-        // Marginal weights
-        let weights: Vec<T> = if gamma_sum > T::zero() {
-            gamma.iter().map(|&g| g / gamma_sum).collect()
+        let log_gamma_sum = log_gamma
+            .iter()
+            .copied()
+            .fold(T::neg_infinity(), log_add_exp);
+        let weights = if Float::is_finite(log_gamma_sum) {
+            log_gamma
+                .iter()
+                .map(|&log_weight| Float::exp(log_weight - log_gamma_sum))
+                .collect()
         } else {
-            let mut w = vec![T::zero(); n_meas + 1];
-            w[0] = T::one(); // All weight on miss
-            w
+            let mut weights = vec![T::zero(); n_meas + 1];
+            weights[0] = T::one();
+            weights
         };
         marginal_weights.push(weights);
 
-        // Updated existence: r' = gamma_sum / (eta[i] + gamma_sum - phi[i])
-        let denom = eta[i] + gamma_sum - phi[i];
-        let r_updated = if denom > T::zero() {
-            gamma_sum / denom
+        // gamma_sum = phi + detections, while the existence denominator is
+        // eta + detections. Form both sums in logs rather than overflowing B.
+        let log_detection_sum = log_gamma
+            .iter()
+            .skip(1)
+            .copied()
+            .fold(T::neg_infinity(), log_add_exp);
+        let log_denominator = log_add_exp(log_eta, log_detection_sum);
+        let r_updated = if log_denominator == T::neg_infinity() {
+            // Both numerator and denominator are zero. Preserve the prior at
+            // this indeterminate model boundary (for example r = p_d = 1
+            // with no supported association event).
+            existence_probs[i]
+        } else if log_gamma_sum == T::neg_infinity() {
+            // A zero existence numerator over a positive denominator is an
+            // exact zero posterior, not an indeterminate 0/0 case.
+            T::zero()
+        } else if Float::is_finite(log_gamma_sum) && Float::is_finite(log_denominator) {
+            Float::exp(log_gamma_sum - log_denominator)
         } else {
             existence_probs[i]
         };
@@ -1129,7 +1161,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::gaussian::GaussianState;
+    use crate::models::{
+        ConstantVelocity2D, PositionSensor2D, RangeBearingSensor, UniformClutter2D,
+        UniformClutterRangeBearing,
+    };
+    use crate::types::gaussian::{GaussianMixture, GaussianState};
     use crate::types::spaces::StateCovariance;
 
     #[cfg(feature = "alloc")]
@@ -1153,5 +1189,182 @@ mod tests {
 
         assert_eq!(filter_state.num_tracks(), 1);
         assert!((filter_state.expected_target_count() - 0.9).abs() < 1e-10);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_linear_update_retains_all_mixture_posterior_modes() {
+        let components = GaussianMixture::from_components(vec![
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([45.0, 50.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([55.0, 50.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        ]);
+        let state = LmbFilterState::from_tracks(vec![LmbTrack::with_components(
+            Label::new(0, 0),
+            0.9,
+            components,
+        )]);
+        let predicted = state.predict(&ConstantVelocity2D::new(0.0, 1.0), &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([50.0, 50.0])],
+            &PositionSensor2D::new(10.0, 0.9),
+            &UniformClutter2D::new(1.0, (0.0, 100.0), (0.0, 100.0)),
+        );
+
+        // Two missed-detection modes plus two measurement-conditioned modes.
+        assert_eq!(updated.tracks.tracks[0].components.len(), 4);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_out_of_support_clutter_still_allows_lbp_target_association_f32() {
+        let track = LmbTrack::new(
+            Label::new(0, 0),
+            0.9_f32,
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([20.0, 20.0, 0.0, 0.0]),
+                StateCovariance::identity().scale(1.0e-8),
+            ),
+        );
+        let predicted = LmbFilterState::from_tracks(vec![track]).predict(
+            &ConstantVelocity2D::new(0.0, 1.0),
+            &NoBirthModel,
+            0.0,
+        );
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([20.0, 20.0])],
+            &PositionSensor2D::new(1.0e-8, 0.9),
+            &UniformClutter2D::new(1.0, (0.0, 10.0), (0.0, 10.0)),
+        );
+
+        assert!(updated.tracks.tracks[0].existence.is_finite());
+        assert!(updated.tracks.tracks[0].existence > 0.9);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_lbp_certain_track_and_detection_uses_measurement() {
+        let clutter = UniformClutter2D::new(1.0_f64, (0.0, 1.0), (0.0, 1.0));
+        let measurement = Measurement::from_array([0.5, 0.5]);
+        let (weights, existence, converged, iterations) = loopy_belief_propagation(
+            &[vec![0.25]],
+            &[1.0],
+            &[1.0],
+            &[measurement],
+            &clutter,
+            20,
+            1.0e-12,
+        );
+
+        assert!(converged);
+        assert!(iterations > 0);
+        assert_eq!(weights.len(), 1);
+        assert_eq!(weights[0], vec![0.0, 1.0]);
+        assert_eq!(existence, vec![1.0]);
+        assert!(weights[0].iter().all(|weight| weight.is_finite()));
+        assert!(existence.iter().all(|probability| probability.is_finite()));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_lbp_zero_detection_likelihood_yields_zero_existence() {
+        let clutter = UniformClutter2D::new(1.0_f64, (0.0, 1.0), (0.0, 1.0));
+        let measurement = Measurement::from_array([0.5, 0.5]);
+        let (weights, existence, _, _) = loopy_belief_propagation(
+            &[vec![0.0]],
+            &[1.0],
+            &[0.5],
+            &[measurement],
+            &clutter,
+            20,
+            1.0e-12,
+        );
+
+        assert_eq!(weights, vec![vec![1.0, 0.0]]);
+        assert_eq!(existence, vec![0.0]);
+        assert!(weights[0].iter().all(|weight| weight.is_finite()));
+        assert!(existence[0].is_finite());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_lbp_zero_boundaries_and_no_measurements_are_finite() {
+        let clutter = UniformClutter2D::new(1.0_f64, (0.0, 1.0), (0.0, 1.0));
+        let measurement = Measurement::from_array([0.5, 0.5]);
+
+        for (existence_probability, detection_probability, likelihood, expected_existence) in [
+            (0.0, 1.0, 0.25, 0.0),
+            (1.0, 0.0, 0.25, 1.0),
+            (1.0, 1.0, 0.0, 1.0),
+        ] {
+            let (weights, existence, _, _) = loopy_belief_propagation(
+                &[vec![likelihood]],
+                &[detection_probability],
+                &[existence_probability],
+                &[measurement],
+                &clutter,
+                20,
+                1.0e-12,
+            );
+            assert_eq!(weights[0], vec![1.0, 0.0]);
+            assert_eq!(existence, vec![expected_existence]);
+            assert!(weights[0].iter().all(|weight| weight.is_finite()));
+        }
+
+        let (weights, existence, converged, iterations) = loopy_belief_propagation::<_, 2, _>(
+            &[Vec::new()],
+            &[1.0],
+            &[1.0],
+            &[],
+            &clutter,
+            20,
+            1.0e-12,
+        );
+        assert_eq!(weights, vec![vec![1.0]]);
+        assert_eq!(existence, vec![1.0]);
+        assert!(converged);
+        assert_eq!(iterations, 0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_ekf_update_retains_all_mixture_posterior_modes() {
+        let components = GaussianMixture::from_components(vec![
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([50.0, -5.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+            GaussianState::new(
+                0.5,
+                StateVector::from_array([50.0, 5.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        ]);
+        let state = LmbFilterState::from_tracks(vec![LmbTrack::with_components(
+            Label::new(0, 0),
+            0.9,
+            components,
+        )]);
+        let predicted = state.predict(&ConstantVelocity2D::new(0.0, 1.0), &NoBirthModel, 0.0);
+        let (updated, _) = predicted.update_ekf(
+            &[Measurement::from_array([50.25, 0.0])],
+            &RangeBearingSensor::new(10.0, 0.2, 0.9),
+            &UniformClutterRangeBearing::new(
+                1.0,
+                (0.0, 100.0),
+                (-core::f64::consts::PI, core::f64::consts::PI),
+            ),
+        );
+
+        assert_eq!(updated.tracks.tracks[0].components.len(), 4);
     }
 }

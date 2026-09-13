@@ -357,7 +357,6 @@ where
 // State Extraction (Legacy - prefer utils::extraction)
 // ============================================================================
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,7 +450,7 @@ mod tests {
     #[cfg(feature = "alloc")]
     #[test]
     fn test_state_extraction() {
-        use crate::utils::{extract_targets, ExtractionConfig};
+        use crate::utils::{ExtractionConfig, extract_targets};
 
         let mut mixture = GaussianMixture::new();
         mixture.push(GaussianState::new(
