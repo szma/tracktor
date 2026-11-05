@@ -120,10 +120,9 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
     /// "A fast implementation of the generalized labeled multi-Bernoulli filter
     /// with joint prediction and update" (Vo & Vo)
     ///
-    /// Key optimizations over separate predict() + update():
-    /// 1. Unique tracks across all hypotheses are collected and predicted once
-    /// 2. Posteriors are computed once per unique (track, measurement) pair
-    /// 3. Hypotheses sharing the same track set share computation
+    /// Survival, birth, and measurement assignments are ranked jointly before
+    /// truncation. Existing tracks retain their hypothesis-specific states;
+    /// birth posteriors are shared across hypotheses.
     ///
     /// # Arguments
     ///
@@ -148,58 +147,45 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
         Clutter: ClutterModel<T, M>,
         Birth: LabeledBirthModel<T, N>,
     {
-        use alloc::collections::BTreeMap;
-
         let mut stats = UpdateStats::default();
 
         // Advance label generator
         self.label_gen.advance_time();
 
-        // Step 1: Collect all unique tracks across all hypotheses and predict them
-        let mut unique_tracks: BTreeMap<Label, GlmbTrack<T, N>> = BTreeMap::new();
-
-        for hypothesis in &self.density.hypotheses {
-            for track in &hypothesis.tracks {
-                unique_tracks
-                    .entry(track.label)
-                    .or_insert_with(|| track.clone());
-            }
-        }
-
-        // Predict each unique track
+        // Step 1: Predict each hypothesis's tracks independently. A label
+        // identifies a target, not its state under different association histories.
         let transition_matrix = transition_model.transition_matrix(config.dt);
         let process_noise = transition_model.process_noise(config.dt);
+        let mut all_tracks: Vec<(GlmbTrack<T, N>, bool, T)> = Vec::new();
+        let mut hypothesis_track_indices = Vec::with_capacity(self.density.hypotheses.len());
 
-        let mut predicted_tracks: BTreeMap<Label, (GlmbTrack<T, N>, T)> = BTreeMap::new();
-
-        for (label, track) in unique_tracks {
-            let p_s = transition_model.survival_probability(&track.state.mean);
-
-            let predicted_mean = transition_matrix.apply_state(&track.state.mean);
-            let predicted_cov = transition_matrix
-                .propagate_covariance(&track.state.covariance)
-                .add(&process_noise);
-
-            let predicted_track = GlmbTrack {
-                label,
-                state: GaussianState::new(track.state.weight, predicted_mean, predicted_cov),
-            };
-
-            predicted_tracks.insert(label, (predicted_track, p_s));
+        for hypothesis in &self.density.hypotheses {
+            let mut track_indices = Vec::with_capacity(hypothesis.tracks.len());
+            for track in &hypothesis.tracks {
+                let p_s = transition_model.survival_probability(&track.state.mean);
+                let predicted_track = GlmbTrack {
+                    label: track.label,
+                    state: GaussianState::new(
+                        track.state.weight,
+                        transition_matrix.apply_state(&track.state.mean),
+                        transition_matrix
+                            .propagate_covariance(&track.state.covariance)
+                            .add(&process_noise),
+                    ),
+                };
+                track_indices.push(all_tracks.len());
+                all_tracks.push((predicted_track, false, p_s));
+            }
+            hypothesis_track_indices.push(track_indices);
         }
 
         // Step 2: Generate birth tracks
         let mut birth_label_gen = self.label_gen.clone();
         let birth_tracks = birth_model.birth_tracks(&mut birth_label_gen);
 
-        // Step 3: Build list of all tracks (predicted existing + birth)
+        // Step 3: Append birth tracks, shared across hypotheses
         let obs_matrix = observation_model.observation_matrix();
         let meas_noise = observation_model.measurement_noise();
-
-        let mut all_tracks: Vec<(GlmbTrack<T, N>, bool, T)> = predicted_tracks
-            .values()
-            .map(|(t, p_s)| (t.clone(), false, *p_s))
-            .collect();
 
         for bt in &birth_tracks {
             all_tracks.push((GlmbTrack::from_bernoulli(bt), true, bt.existence));
@@ -259,77 +245,40 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             }
         }
 
-        // Step 5: Build label-to-index mapping
-        let label_to_idx: BTreeMap<Label, usize> = all_tracks
-            .iter()
-            .enumerate()
-            .map(|(i, (t, _, _))| (t.label, i))
-            .collect();
-
-        // Step 6: Group hypotheses by track set
-        // Hypotheses with the same set of surviving tracks can share the cost matrix
-        let mut hypothesis_groups: BTreeMap<Vec<Label>, Vec<(usize, T)>> = BTreeMap::new();
-
-        for (hyp_idx, hypothesis) in self.density.hypotheses.iter().enumerate() {
-            let mut track_labels: Vec<Label> =
-                hypothesis.tracks.iter().map(|track| track.label).collect();
-            track_labels.sort();
-
-            hypothesis_groups
-                .entry(track_labels)
-                .or_default()
-                .push((hyp_idx, hypothesis.log_weight));
-        }
-
-        // Step 7: Process each hypothesis group
+        // Step 5: Process each hypothesis using its own predicted track indices
         let mut new_hypotheses: Vec<GlmbHypothesis<T, N>> = Vec::new();
 
-        for (track_labels, group) in hypothesis_groups {
-            // Build cost matrix for this track set + birth tracks
-            // Rows: existing tracks from this group + all birth tracks
+        for (hypothesis, mut track_indices) in
+            self.density.hypotheses.iter().zip(hypothesis_track_indices)
+        {
+            // Build the cost matrix for this hypothesis's tracks + birth tracks.
+            // Rows: existing tracks from this hypothesis + all birth tracks
             // Columns: measurements + private absent and missed columns
-
-            let n_existing = track_labels.len();
+            let n_existing = track_indices.len();
             let n_birth = birth_tracks.len();
-            let n_group_tracks = n_existing + n_birth;
+            let n_hypothesis_tracks = n_existing + n_birth;
 
-            if n_group_tracks == 0 && n_meas == 0 {
-                // Empty hypothesis
-                for (_, log_weight) in &group {
-                    new_hypotheses.push(GlmbHypothesis::empty(*log_weight));
-                }
-                continue;
-            }
-
-            if n_group_tracks == 0 {
+            if n_hypothesis_tracks == 0 {
                 // The common clutter set likelihood is factored out of every
                 // hypothesis; association costs below use target/kappa ratios.
-                for (_, log_weight) in &group {
-                    new_hypotheses.push(GlmbHypothesis::empty(*log_weight));
-                }
+                new_hypotheses.push(GlmbHypothesis::empty(hypothesis.log_weight));
                 continue;
             }
-
-            // Map group track indices to global indices
-            let mut group_track_indices: Vec<usize> = track_labels
-                .iter()
-                .filter_map(|l| label_to_idx.get(l).copied())
-                .collect();
 
             // Add birth track indices
             for i in 0..n_birth {
                 let birth_idx = n_tracks - n_birth + i;
-                group_track_indices.push(birth_idx);
+                track_indices.push(birth_idx);
             }
 
             // Build cost matrix
             // Each row has a private absent/death column and a private
             // present-but-missed column in addition to shared measurements.
-            let n_cols = n_meas + 2 * n_group_tracks;
-            let mut cost_matrix = crate::assignment::CostMatrix::zeros(n_group_tracks, n_cols);
+            let n_cols = n_meas + 2 * n_hypothesis_tracks;
+            let mut cost_matrix = crate::assignment::CostMatrix::zeros(n_hypothesis_tracks, n_cols);
             let large_cost = 1e10_f64;
 
-            for (row, &global_idx) in group_track_indices.iter().enumerate() {
+            for (row, &global_idx) in track_indices.iter().enumerate() {
                 let (_, _, existence_probability) = &all_tracks[global_idx];
                 let p_d = detection_probs[global_idx];
 
@@ -360,7 +309,7 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                 );
 
                 let missed_probability = *existence_probability * (T::one() - p_d);
-                let missed_col = n_meas + n_group_tracks + row;
+                let missed_col = n_meas + n_hypothesis_tracks + row;
                 cost_matrix.set(
                     row,
                     missed_col,
@@ -368,10 +317,10 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
                 );
 
                 // Private columns can only be selected by their own row.
-                for other_row in 0..n_group_tracks {
+                for other_row in 0..n_hypothesis_tracks {
                     if other_row != row {
                         cost_matrix.set(row, n_meas + other_row, large_cost);
-                        cost_matrix.set(row, n_meas + n_group_tracks + other_row, large_cost);
+                        cost_matrix.set(row, n_meas + n_hypothesis_tracks + other_row, large_cost);
                     }
                 }
             }
@@ -380,49 +329,45 @@ impl<T: RealField + Float + Copy, const N: usize> GlmbFilterState<T, N, Updated>
             let assignments =
                 crate::assignment::hungarian::murty_k_best(&cost_matrix, config.k_best);
 
-            // Generate hypotheses from assignments for each input hypothesis in this group
-            for (_hyp_idx, base_log_weight) in &group {
-                for assignment in &assignments {
-                    let mut output_tracks: Vec<GlmbTrack<T, N>> = Vec::new();
-                    let mut associations: Vec<Option<usize>> = Vec::new();
+            // Generate hypotheses from assignments for this input hypothesis
+            for assignment in &assignments {
+                let mut output_tracks: Vec<GlmbTrack<T, N>> = Vec::new();
+                let mut associations: Vec<Option<usize>> = Vec::new();
 
-                    for (row, col_opt) in assignment.mapping.iter().enumerate() {
-                        let col = match col_opt {
-                            Some(c) => *c,
-                            None => continue,
-                        };
-                        let global_idx = group_track_indices[row];
-                        let (track, _, _) = &all_tracks[global_idx];
+                for (row, col_opt) in assignment.mapping.iter().enumerate() {
+                    let col = match col_opt {
+                        Some(c) => *c,
+                        None => continue,
+                    };
+                    let global_idx = track_indices[row];
+                    let (track, _, _) = &all_tracks[global_idx];
 
-                        if col < n_meas {
-                            if let Some((updated_mean, updated_cov, _)) =
-                                &posteriors[global_idx][col]
-                            {
-                                output_tracks.push(GlmbTrack {
-                                    label: track.label,
-                                    state: GaussianState::new(
-                                        track.state.weight,
-                                        *updated_mean,
-                                        *updated_cov,
-                                    ),
-                                });
-                                associations.push(Some(col));
-                            }
-                        } else if col >= n_meas + n_group_tracks {
-                            // The track exists/survives but was not detected.
-                            output_tracks.push(track.clone());
-                            associations.push(None);
+                    if col < n_meas {
+                        if let Some((updated_mean, updated_cov, _)) = &posteriors[global_idx][col] {
+                            output_tracks.push(GlmbTrack {
+                                label: track.label,
+                                state: GaussianState::new(
+                                    track.state.weight,
+                                    *updated_mean,
+                                    *updated_cov,
+                                ),
+                            });
+                            associations.push(Some(col));
                         }
-                        // The first private block denotes non-birth/death and
-                        // therefore contributes no output track.
+                    } else if col >= n_meas + n_hypothesis_tracks {
+                        // The track exists/survives but was not detected.
+                        output_tracks.push(track.clone());
+                        associations.push(None);
                     }
-
-                    new_hypotheses.push(GlmbHypothesis {
-                        log_weight: *base_log_weight - T::from(assignment.cost).unwrap(),
-                        tracks: output_tracks,
-                        current_association: associations,
-                    });
+                    // The first private block denotes non-birth/death and
+                    // therefore contributes no output track.
                 }
+
+                new_hypotheses.push(GlmbHypothesis {
+                    log_weight: hypothesis.log_weight - T::from(assignment.cost).unwrap(),
+                    tracks: output_tracks,
+                    current_association: associations,
+                });
             }
         }
 
@@ -1491,8 +1436,8 @@ where
 
     /// Runs one complete cycle using the fast joint predict-update algorithm.
     ///
-    /// This is more efficient than `step()` when there are many hypotheses,
-    /// as it shares computation across hypotheses with the same track set.
+    /// Survival, birth, and measurement assignments are ranked jointly, rather
+    /// than truncating survival/death hypotheses before measurement updates.
     ///
     /// See: "A fast implementation of the generalized labeled multi-Bernoulli
     /// filter with joint prediction and update" (Vo & Vo)
@@ -1944,6 +1889,139 @@ mod tests {
             .max_by(|left, right| left.log_weight.partial_cmp(&right.log_weight).unwrap())
             .unwrap();
         assert_eq!(joint_best.current_association, [Some(0)]);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_step_joint_preserves_same_label_state_alternatives() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+
+        let label = Label::new(0, 0);
+        let hypotheses: Vec<_> = [(0.0, 1.0, 0.25), (100.0, 4.0, 0.75)]
+            .into_iter()
+            .map(|(x, variance, probability)| {
+                GlmbHypothesis::new(
+                    Float::ln(probability),
+                    vec![GlmbTrack::new(
+                        label,
+                        GaussianState::new(
+                            1.0,
+                            StateVector::from_array([x, 0.0, 0.0, 0.0]),
+                            StateCovariance::identity().scale(variance),
+                        ),
+                    )],
+                    vec![None],
+                )
+            })
+            .collect();
+        let mut filter = GlmbFilter::new(
+            ConstantVelocity2D::new(0.0_f64, 1.0),
+            PositionSensor2D::new(1.0, 0.0),
+            UniformClutter2D::new(1.0, (-200.0, 200.0), (-200.0, 200.0)),
+            NoBirthModel,
+            1,
+        );
+        filter.truncation = GlmbTruncationConfig::new(-100.0, 10, None);
+
+        for reverse in [false, true] {
+            let mut inputs = hypotheses.clone();
+            if reverse {
+                inputs.reverse();
+            }
+            let (updated, _) =
+                filter.step_joint(GlmbFilterState::from_hypotheses(inputs), &[], 0.0);
+            let mut outputs = updated.density.hypotheses;
+            assert_eq!(outputs.len(), 2);
+            assert!(
+                outputs
+                    .iter()
+                    .all(|hypothesis| hypothesis.tracks.len() == 1)
+            );
+            outputs.sort_by(|a, b| {
+                a.tracks[0].state.mean.as_slice()[0]
+                    .partial_cmp(&b.tracks[0].state.mean.as_slice()[0])
+                    .unwrap()
+            });
+            for (output, expected) in outputs.iter().zip(&hypotheses) {
+                assert_eq!(output.tracks, expected.tracks);
+                assert_eq!(output.current_association, [None]);
+                let expected_log_weight = expected.log_weight - Float::ln(0.75);
+                assert!((output.log_weight - expected_log_weight).abs() < 1e-12);
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_joint_same_label_uses_hypothesis_specific_measurement_posteriors() {
+        use crate::filters::lmb::NoBirthModel;
+        use crate::models::{ConstantVelocity2D, PositionSensor2D, UniformClutter2D};
+
+        let label = Label::new(0, 0);
+        let hypotheses: Vec<_> = [(0.0, 1.0), (2.0, 4.0)]
+            .into_iter()
+            .map(|(x, variance)| {
+                GlmbHypothesis::new(
+                    Float::ln(0.5),
+                    vec![GlmbTrack::new(
+                        label,
+                        GaussianState::new(
+                            1.0,
+                            StateVector::from_array([x, 0.0, 0.0, 0.0]),
+                            StateCovariance::identity().scale(variance),
+                        ),
+                    )],
+                    vec![None],
+                )
+            })
+            .collect();
+        let config = super::super::types::GlmbUpdateConfig::new(
+            GlmbTruncationConfig::new(-100.0, 10, None),
+            1,
+            0.0,
+        );
+
+        for reverse in [false, true] {
+            let mut inputs = hypotheses.clone();
+            if reverse {
+                inputs.reverse();
+            }
+            let (updated, stats) = GlmbFilterState::from_hypotheses(inputs)
+                .joint_predict_and_update(
+                    &[Measurement::from_array([1.0, 0.0])],
+                    &ConstantVelocity2D::new(0.0_f64, 1.0),
+                    &PositionSensor2D::new(1.0, 1.0),
+                    &UniformClutter2D::new(1.0, (-10.0, 10.0), (-10.0, 10.0)),
+                    &NoBirthModel,
+                    &config,
+                );
+            assert_eq!(stats.singular_covariance_count, 0);
+            let mut outputs = updated.density.hypotheses;
+            assert_eq!(outputs.len(), 2);
+            assert!(
+                outputs
+                    .iter()
+                    .all(|hypothesis| hypothesis.tracks.len() == 1)
+            );
+            outputs.sort_by(|a, b| {
+                a.tracks[0].state.mean.as_slice()[0]
+                    .partial_cmp(&b.tracks[0].state.mean.as_slice()[0])
+                    .unwrap()
+            });
+            for (output, (mean, variance)) in outputs.iter().zip([(0.5, 0.5), (1.2, 0.8)]) {
+                assert_eq!(output.current_association, [Some(0)]);
+                let track = &output.tracks[0];
+                assert_eq!(track.label, label);
+                assert!((track.state.mean.as_slice()[0] - mean).abs() < 1e-12);
+                assert!((track.state.covariance.as_matrix()[(0, 0)] - variance).abs() < 1e-12);
+            }
+            // S = 2I and 5I give likelihood ratio (5/2) * exp(-1/4 + 1/10).
+            let expected_log_ratio = Float::ln(2.5_f64) - 0.15;
+            assert!(
+                (outputs[0].log_weight - outputs[1].log_weight - expected_log_ratio).abs() < 1e-12
+            );
+        }
     }
 
     #[cfg(feature = "alloc")]

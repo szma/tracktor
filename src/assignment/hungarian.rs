@@ -124,11 +124,10 @@ pub fn hungarian(cost: &CostMatrix) -> Result<Assignment, TracktorError> {
         return Ok(Assignment::new(vec![], 0.0));
     }
 
-    // Make the matrix square by padding with large values
+    // Dummy rows/columns represent unassigned entries, not forbidden pairs.
+    // Zero padding preserves real cost differences when updating potentials.
     let n = n_rows.max(n_cols);
-    let large = 1e20_f64;
-
-    let mut matrix = vec![large; n * n];
+    let mut matrix = vec![0.0; n * n];
     for i in 0..n_rows {
         for j in 0..n_cols {
             matrix[i * n + j] = cost.get(i, j);
@@ -676,6 +675,94 @@ mod tests {
     }
 
     #[cfg(feature = "alloc")]
+    fn assert_optimal_assignment(cost: &CostMatrix, result: &Assignment, expected_cost: f64) {
+        assert_eq!(result.mapping.len(), cost.rows());
+        assert_eq!(result.num_assigned(), cost.rows().min(cost.cols()));
+        let mut used = vec![false; cost.cols()];
+        for (_, col) in result.pairs() {
+            assert!(col < cost.cols());
+            assert!(!used[col], "Column {col} assigned more than once");
+            used[col] = true;
+        }
+        let mapped_cost: f64 = result.pairs().map(|(row, col)| cost.get(row, col)).sum();
+        assert_eq!(result.cost, mapped_cost);
+        assert_eq!(result.cost, expected_cost);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_more_rows_than_columns_optimal() {
+        let cost = CostMatrix::from_vec(vec![1.0, 1.0, 2.0, 2.0, 1.0, 1.0], 3, 2).unwrap();
+        let result = hungarian(&cost).unwrap();
+
+        assert_optimal_assignment(&cost, &result, 2.0);
+        assert!(result.mapping[0].is_some());
+        assert_eq!(result.mapping[1], None);
+        assert!(result.mapping[2].is_some());
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_more_columns_than_rows_optimal() {
+        let cost = CostMatrix::from_vec(vec![1.0, 2.0, 1.0, 1.0, 2.0, 1.0], 2, 3).unwrap();
+        let result = hungarian(&cost).unwrap();
+
+        assert_optimal_assignment(&cost, &result, 2.0);
+        assert!(result.mapping.iter().all(|&col| col != Some(1)));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_rectangular_negative_costs() {
+        let tall = CostMatrix::from_vec(vec![-1.0, -1.0, -2.0, -2.0, -1.0, -1.0], 3, 2).unwrap();
+        let wide = CostMatrix::from_vec(vec![-1.0, -2.0, -1.0, -1.0, -2.0, -1.0], 2, 3).unwrap();
+
+        for cost in [tall, wide] {
+            assert_optimal_assignment(&cost, &hungarian(&cost).unwrap(), -3.0);
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    fn brute_force_cost(cost: &CostMatrix, row: usize, used: &mut [bool], remaining: usize) -> f64 {
+        if remaining == 0 {
+            return 0.0;
+        }
+        if cost.rows() - row < remaining {
+            return f64::INFINITY;
+        }
+        let mut best = brute_force_cost(cost, row + 1, used, remaining);
+        for col in 0..cost.cols() {
+            if !used[col] {
+                used[col] = true;
+                best = best
+                    .min(cost.get(row, col) + brute_force_cost(cost, row + 1, used, remaining - 1));
+                used[col] = false;
+            }
+        }
+        best
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_rectangular_matches_brute_force() {
+        // Exhaust all 2x3 and 3x2 matrices with entries in {-1, 0, 1}.
+        for (rows, cols) in [(2, 3), (3, 2)] {
+            for mut encoded in 0..3_usize.pow((rows * cols) as u32) {
+                let data = (0..rows * cols)
+                    .map(|_| {
+                        let value = (encoded % 3) as f64 - 1.0;
+                        encoded /= 3;
+                        value
+                    })
+                    .collect();
+                let cost = CostMatrix::from_vec(data, rows, cols).unwrap();
+                let expected = brute_force_cost(&cost, 0, &mut vec![false; cols], rows.min(cols));
+                assert_optimal_assignment(&cost, &hungarian(&cost).unwrap(), expected);
+            }
+        }
+    }
+
+    #[cfg(feature = "alloc")]
     #[test]
     fn test_hungarian_gated() {
         let cost = CostMatrix::from_vec(vec![1.0, 100.0, 100.0, 2.0], 2, 2).unwrap();
@@ -685,6 +772,29 @@ mod tests {
         // Both assignments should be made (1.0 and 2.0 are below threshold)
         assert_eq!(result.num_assigned(), 2);
         assert!((result.cost - 3.0).abs() < 0.1);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_gated_rectangular() {
+        let cost = CostMatrix::from_vec(vec![1.0, 100.0, 2.0, 2.0, 1.0, 100.0], 3, 2).unwrap();
+        let result = hungarian_gated(&cost, 10.0).unwrap();
+
+        assert_optimal_assignment(&cost, &result, 3.0);
+        assert!(result.pairs().all(|(row, col)| cost.get(row, col) <= 10.0));
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_hungarian_constrained_rectangular() {
+        let cost = CostMatrix::from_vec(vec![1.0, 1.0, 2.0, 2.0, 1.0, 1.0], 3, 2).unwrap();
+        let fixed = hungarian_constrained(&cost, &[(1, 0)], &[]).unwrap();
+        assert_optimal_assignment(&cost, &fixed, 3.0);
+        assert_eq!(fixed.mapping[1], Some(0));
+
+        let excluded = hungarian_constrained(&cost, &[], &[(0, 0), (0, 1)]).unwrap();
+        assert_optimal_assignment(&cost, &excluded, 3.0);
+        assert_eq!(excluded.mapping[0], None);
     }
 
     #[cfg(feature = "alloc")]
@@ -846,6 +956,7 @@ mod tests {
         let results = murty_k_best(&cost, 3);
 
         assert!(!results.is_empty(), "Should find at least one solution");
+        assert_optimal_assignment(&cost, &results[0], 5.0);
 
         // Each solution should assign at most 2 rows (since we have 2 columns)
         for result in &results {

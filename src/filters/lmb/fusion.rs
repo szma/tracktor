@@ -52,10 +52,18 @@ pub trait Merger<T: RealField, const N: usize> {
 /// Pros: Fast, robust, simple
 /// Cons: Ignores sensor correlation, may inflate uncertainties
 #[cfg(feature = "alloc")]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ArithmeticAverageMerger {
-    /// Maximum number of components in fused mixture
+    /// Maximum number of components in fused mixture (default: 100)
     pub max_components: usize,
+}
+
+#[cfg(feature = "alloc")]
+impl Default for ArithmeticAverageMerger {
+    /// Retains up to 100 components, matching the marginal LMB updater's default cap.
+    fn default() -> Self {
+        Self::new(100)
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -423,6 +431,51 @@ mod tests {
         assert_eq!(fused.label, label);
         // Existence should be average: (0.8 + 0.6) / 2 = 0.7
         assert!((fused.existence - 0.7).abs() < 1e-10);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_arithmetic_average_merger_default_retains_components() {
+        let label = Label::new(0, 0);
+        let track1 = create_test_track(label, 1.0, 0.8);
+        let track2 = create_test_track(label, 3.0, 0.6);
+
+        let merger = ArithmeticAverageMerger::default();
+        let fused = merger.merge(&[&track1, &track2], &[1.0, 3.0]);
+
+        assert_eq!(fused.label, label);
+        assert!((fused.existence - 0.65).abs() < 1e-10);
+        assert_eq!(fused.num_components(), 2);
+        assert!((fused.components.total_weight() - 1.0).abs() < 1e-10);
+        assert!((fused.components.components[0].weight - 0.75).abs() < 1e-10);
+        assert!((fused.components.components[1].weight - 0.25).abs() < 1e-10);
+        assert!((*fused.weighted_mean().index(0) - 2.5).abs() < 1e-10);
+        let best = fused.best_estimate().expect("fused track has an estimate");
+        assert_eq!(*best.mean.index(0), 3.0);
+        assert_eq!(merger.max_components, 100);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_arithmetic_average_merger_truncates_and_normalizes() {
+        let label = Label::new(0, 0);
+        let track1 = create_test_track(label, 1.0, 0.8);
+        let track2 = create_test_track(label, 3.0, 0.8);
+        let track3 = create_test_track(label, 5.0, 0.8);
+
+        let merger = ArithmeticAverageMerger::new(2);
+        let fused = merger.merge(&[&track1, &track2, &track3], &[1.0, 3.0, 6.0]);
+
+        assert_eq!(fused.num_components(), 2);
+        assert!((fused.existence - 0.8).abs() < 1e-10);
+        assert!((fused.components.total_weight() - 1.0).abs() < 1e-10);
+        let components = &fused.components.components;
+        assert_eq!(*components[0].mean.index(0), 5.0);
+        assert_eq!(*components[1].mean.index(0), 3.0);
+        assert!((components[0].weight - 2.0 / 3.0).abs() < 1e-10);
+        assert!((components[1].weight - 1.0 / 3.0).abs() < 1e-10);
+        assert!((*fused.weighted_mean().index(0) - 13.0 / 3.0).abs() < 1e-10);
+        assert_eq!(*fused.best_estimate().unwrap().mean.index(0), 5.0);
     }
 
     #[cfg(feature = "alloc")]
