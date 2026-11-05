@@ -244,11 +244,8 @@ impl<T: RealField + Float + Copy, const N: usize> LmbmFilterState<T, N, Predicte
             // exclusivity through the assignment solver.
             let miss_column_offset = n_meas;
             let forbidden_cost = 1e20_f64;
-            let mut cost_matrix = crate::assignment::CostMatrix::filled(
-                n_tracks,
-                n_meas + n_tracks,
-                forbidden_cost,
-            );
+            let mut cost_matrix =
+                crate::assignment::CostMatrix::filled(n_tracks, n_meas + n_tracks, forbidden_cost);
             let mut posteriors = PosteriorGrid::new(n_tracks, n_meas);
             let mut detection_probs: Vec<T> = Vec::with_capacity(n_tracks);
 
@@ -635,39 +632,41 @@ mod tests {
     }
 
     #[cfg(feature = "alloc")]
-    #[test]
-    fn test_detection_hypothesis_odds_include_likelihood_once() {
-        use crate::models::{PositionSensor2D, UniformClutter2D};
-        use crate::types::spaces::StateCovariance;
-
-        let tracks = vec![
-            BernoulliTrack::new(
-                Label::new(0, 0),
-                0.8,
-                GaussianState::new(
-                    1.0,
-                    StateVector::from_array([0.0_f64, 0.0, 0.0, 0.0]),
-                    StateCovariance::identity(),
-                ),
-            ),
-            BernoulliTrack::new(
-                Label::new(0, 1),
-                0.8,
-                GaussianState::new(
-                    1.0,
-                    StateVector::from_array([2.0_f64, 0.0, 0.0, 0.0]),
-                    StateCovariance::identity(),
-                ),
-            ),
-        ];
-        let predicted = LmbmFilterState::<f64, 4, Predicted> {
-            state: LmbmState {
-                hypotheses: vec![LmbmHypothesis::new(0.0, tracks)],
-            },
+    fn predicted_state(
+        hypotheses: Vec<LmbmHypothesis<f64, 4>>,
+    ) -> LmbmFilterState<f64, 4, Predicted> {
+        LmbmFilterState {
+            state: LmbmState { hypotheses },
             label_gen: LabelGenerator::new(),
             time_step: 0,
             _phase: PhantomData,
-        };
+        }
+    }
+
+    #[cfg(feature = "alloc")]
+    fn test_track(label: u32, existence: f64, x: f64) -> BernoulliTrack<f64, 4> {
+        use crate::types::spaces::StateCovariance;
+
+        BernoulliTrack::new(
+            Label::new(0, label),
+            existence,
+            GaussianState::new(
+                1.0,
+                StateVector::from_array([x, 0.0, 0.0, 0.0]),
+                StateCovariance::identity(),
+            ),
+        )
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_one_track_one_measurement_has_detection_and_miss_hypotheses() {
+        use crate::models::{PositionSensor2D, UniformClutter2D};
+
+        let predicted = predicted_state(vec![LmbmHypothesis::new(
+            0.0,
+            vec![test_track(0, 0.6, 0.0)],
+        )]);
         let (updated, _) = predicted.update(
             &[Measurement::from_array([0.0, 0.0])],
             &PositionSensor2D::new(1.0, 0.5),
@@ -677,24 +676,140 @@ mod tests {
         );
 
         assert_eq!(updated.state.hypotheses.len(), 2);
-        let mut assigned_track_zero_weight = None;
-        let mut assigned_track_one_weight = None;
-        for hypothesis in &updated.state.hypotheses {
-            let track_zero_was_updated =
-                hypothesis.tracks[0].state.covariance.as_matrix()[(0, 0)] < 0.75;
-            if track_zero_was_updated {
-                assigned_track_zero_weight = Some(hypothesis.log_weight);
-            } else {
-                assert!(hypothesis.tracks[1].state.covariance.as_matrix()[(0, 0)] < 0.75);
-                assigned_track_one_weight = Some(hypothesis.log_weight);
-            }
-        }
+        assert!(
+            updated
+                .state
+                .hypotheses
+                .iter()
+                .any(|hypothesis| hypothesis.tracks[0].existence == 1.0)
+        );
+        assert!(
+            updated
+                .state
+                .hypotheses
+                .iter()
+                .any(|hypothesis| (hypothesis.tracks[0].existence - 3.0 / 7.0).abs() < 1.0e-12)
+        );
+    }
 
-        // Both alternatives have the same p_d, clutter, and missed-detection
-        // factors. With innovation covariance 2I and innovations 0 and [2, 0],
-        // ln(L_0 / L_1) is exactly 1. A duplicate likelihood term makes this 2.
-        let log_odds = assigned_track_zero_weight.unwrap() - assigned_track_one_weight.unwrap();
-        assert!((log_odds - 1.0).abs() < 1.0e-12);
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_zero_existence_cannot_produce_detection_hypothesis() {
+        use crate::models::{PositionSensor2D, UniformClutter2D};
+
+        let predicted = predicted_state(vec![LmbmHypothesis::new(
+            0.0,
+            vec![test_track(0, 0.0, 0.0)],
+        )]);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([0.0, 0.0])],
+            &PositionSensor2D::new(1.0, 0.5),
+            &UniformClutter2D::new(1.0, (-5.0, 5.0), (-5.0, 5.0)),
+            2,
+            2,
+        );
+
+        assert_eq!(updated.state.hypotheses.len(), 1);
+        assert_eq!(updated.state.hypotheses[0].tracks[0].existence, 0.0);
+        assert_eq!(updated.state.hypotheses[0].log_weight, 0.0);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_unequal_existence_detection_odds_match_event_probabilities() {
+        use crate::models::{PositionSensor2D, UniformClutter2D};
+
+        let predicted = predicted_state(vec![LmbmHypothesis::new(
+            0.0,
+            vec![test_track(0, 0.2, 0.0), test_track(1, 0.8, 0.0)],
+        )]);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([0.0, 0.0])],
+            &PositionSensor2D::new(1.0, 0.5),
+            &UniformClutter2D::new(1.0, (-5.0, 5.0), (-5.0, 5.0)),
+            3,
+            3,
+        );
+
+        assert_eq!(updated.state.hypotheses.len(), 3);
+        let assigned_zero = updated
+            .state
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks[0].existence == 1.0)
+            .unwrap();
+        let assigned_one = updated
+            .state
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks[1].existence == 1.0)
+            .unwrap();
+
+        // L and kappa are common, so the event odds are
+        // [r0 * (1-r1*p_d)] / [(1-r0*p_d) * r1].
+        let expected_log_odds = Float::ln((0.2 * 0.6) / (0.9 * 0.8));
+        let actual_log_odds = assigned_zero.log_weight - assigned_one.log_weight;
+        assert!((actual_log_odds - expected_log_odds).abs() < 1.0e-12);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_no_measurement_weights_include_miss_event_probabilities() {
+        use crate::models::{PositionSensor2D, UniformClutter2D};
+
+        let predicted = predicted_state(vec![
+            LmbmHypothesis::new(0.0, vec![test_track(0, 0.2, 0.0)]),
+            LmbmHypothesis::new(0.0, vec![test_track(0, 0.8, 0.0)]),
+        ]);
+        let (updated, _) = predicted.update(
+            &[],
+            &PositionSensor2D::new(1.0, 0.5),
+            &UniformClutter2D::new(1.0, (-5.0, 5.0), (-5.0, 5.0)),
+            2,
+            2,
+        );
+
+        assert_eq!(updated.state.hypotheses.len(), 2);
+        let low_existence = updated
+            .state
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks[0].existence < 0.2)
+            .unwrap();
+        let high_existence = updated
+            .state
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks[0].existence > 0.6)
+            .unwrap();
+        let actual_log_odds = low_existence.log_weight - high_existence.log_weight;
+        assert!((actual_log_odds - Float::ln(0.9_f64 / 0.6)).abs() < 1.0e-12);
+    }
+
+    #[cfg(feature = "alloc")]
+    #[test]
+    fn test_detection_conditioned_existence_is_one() {
+        use crate::models::{PositionSensor2D, UniformClutter2D};
+
+        let predicted = predicted_state(vec![LmbmHypothesis::new(
+            0.0,
+            vec![test_track(0, 0.01, 0.0)],
+        )]);
+        let (updated, _) = predicted.update(
+            &[Measurement::from_array([0.0, 0.0])],
+            &PositionSensor2D::new(1.0, 0.1),
+            &UniformClutter2D::new(1.0, (-5.0, 5.0), (-5.0, 5.0)),
+            2,
+            2,
+        );
+
+        let detection = updated
+            .state
+            .hypotheses
+            .iter()
+            .find(|hypothesis| hypothesis.tracks[0].state.covariance.as_matrix()[(0, 0)] < 0.75)
+            .unwrap();
+        assert_eq!(detection.tracks[0].existence, 1.0);
     }
 
     #[cfg(feature = "alloc")]
